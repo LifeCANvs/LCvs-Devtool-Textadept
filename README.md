@@ -41,6 +41,31 @@ compiled into the application itself.
 [GTK]: https://gtk.org
 [ncurses]: https://invisible-island.net/ncurses/ncurses.html
 
+### Platforms / Systems supported versions
+
+- Windows 10 64-bit: up to [current release][]; minimum requirement since release 12.1 (and 12.0beta)
+- Windows 8.1/8/7 64-bit: up to [release 11.4][] (and 12.0alpha3)
+- Windows Vista: ?
+- Windows XP 32-bit: up to [release 11.3][] (dropped support for 32-bit Windows with 11.4alpha)
+- Windows 98SE: ?
+- Windows 95: ?
+- Windows 2000: ?
+- Windows NT4: ?
+
+- macOS X 11: up to [current release][]; minimum requirement since release 12.1 (and 12.0beta)
+- macOS X 10.10: up to 11.5a
+- macOS X 10.7: up to [release 11.3][]
+- macOS X 10.6: up to [release 10.8][]
+
+- FreeBSD 13+: up to release 11.4 (and 11.5alpha) (dropped BSD support with 11.5alpha2)
+
+[current release]: https://github.com/orbitalquark/textadept/releases/tag/textadept_12.4
+[release 12.1]: https://github.com/orbitalquark/textadept/releases/tag/textadept_12.1
+[release 11.4]: https://github.com/orbitalquark/textadept/releases/tag/textadept_11.4
+[release 11.3]: https://github.com/orbitalquark/textadept/releases/tag/textadept_11.3
+[release 10.8]: https://github.com/orbitalquark/textadept/releases/tag/textadept_10.8
+
+
 ## Download
 
 Textadept releases can be found [here][1]. Select the appropriate package for your platform. A
