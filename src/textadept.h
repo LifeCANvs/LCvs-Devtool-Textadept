@@ -69,7 +69,7 @@ void show_context_menu(const char *name, void *userdata);
 /** Notifies Textadept that there has been a change between light mode and dark mode.
  * Textadept will call `is_dark_mode()` in order to determine which mode is enabled.
  */
-void mode_changed();
+void mode_changed(void);
 
 /** Notifies Textadept that a spawned child process has produced the given stdout or stderr.
  * Textadept will call any functions listening for that output.
@@ -81,13 +81,20 @@ void process_output(Process *proc, const char *s, size_t len, bool is_stdout);
  */
 void process_exited(Process *proc, int code);
 
+/** Asks Textadept if the platform can quit.
+ * If the return value is `false`, something is preventing Textadept from quitting (e.g. unsaved
+ * changes) and the platform should not quit yet.
+ * @return true or false depending on whether Textadept is ready to quit
+ */
+bool can_quit(void);
+
 /** Closes Textadept.
  * Unsplits panes, closes buffers, deletes Scintilla views, and closes Lua. During this process,
  * Textadept may still call `SS()`, so platforms should take care to call this while Scintilla
  * is still available (perhaps just before exiting the main event loop).
  * This does not need to be called if `init_textadept()` failed.
  */
-void close_textadept();
+void close_textadept(void);
 
 /** Returns the value t[n] as an integer where t is the value at the given valid index.
  * The access is raw; that is, it does not invoke metamethods.

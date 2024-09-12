@@ -4,10 +4,18 @@
 # Generates Textadept's documentation.
 # Requires LDoc and Discount.
 
-# Generate API documentation using LDoc.
-ldoc -c ../.config.ld --filter scripts.markdowndoc.ldoc . > ../docs/api.md
-line=`grep -m1 -n '#' ../docs/api.md | cut -d: -f1` # strip any leading LDoc stdout
-sed -i -e "1,$(( $line - 1 ))d" ../docs/api.md
+if [ "`uname`" = "Darwin" ]; then
+	sed () {
+		gsed "$@"
+	}
+fi
+
+# Update API documentation, if possible. (This is unnecessary on end-user machines.)
+if command -v ldoc &>/dev/null; then
+	ldoc -c ../.config.ld --filter scripts.markdowndoc.ldoc . > ../docs/api.md
+	line=`grep -m1 -n '#' ../docs/api.md | cut -d: -f1` # strip any leading LDoc stdout
+	sed -i -e "1,$(( $line - 1 ))d" ../docs/api.md
+fi
 
 # Generate HTML from Markdown (docs/*.html from docs/*.md)
 cd ../docs

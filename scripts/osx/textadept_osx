@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Copyright 2007-2024 Mitchell. See LICENSE.
 
 # Set environment variables of resources within Textadept.app.
@@ -7,10 +7,6 @@ export DYLD_FRAMEWORK_PATH="$bundle/Contents/Frameworks"
 
 # Strip out the argument added by macOS.
 if [ x`echo "x$1" | sed "s/^x-psn_.*//"` == x ]; then shift 1; fi
-
-# Source '~/.textadept/osx_env.sh' to set variables like $PATH when opening Textadept.app from
-# the Dock or the Finder.
-if [ -f $HOME/.textadept/osx_env.sh ]; then . $HOME/.textadept/osx_env.sh; fi
 
 # Run Textadept.
 exec "$bundle/Contents/MacOS/textadept" "$@"

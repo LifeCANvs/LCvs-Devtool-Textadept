@@ -3,15 +3,15 @@
 --- Extends Lua's _G table to provide extra functions and fields for Textadept.
 -- @module _G
 
+for _, arg in ipairs(arg) do if arg == '-T' or arg == '--cov' then require('luacov') end end
+
 --- The Textadept release version string.
-_RELEASE = 'Textadept 12.4'
+_RELEASE = 'Textadept 12.5 beta 2'
 --- Textadept's copyright information.
 _COPYRIGHT = 'Copyright © 2007-2024 Mitchell. See LICENSE.\n' ..
 	'https://orbitalquark.github.io/textadept'
 
 package.path = string.format('%s/core/?.lua;%s', _HOME, package.path)
-
--- for _, arg in ipairs(arg) do if arg == '-t' or arg == '--test' then pcall(require, 'luacov') end end
 
 require('assert')
 _SCINTILLA = require('iface')
@@ -23,30 +23,6 @@ lexer = require('lexer')
 require('lfs_ext')
 require('ui')
 keys = require('keys')
-
--- pdcurses compatibility.
-if CURSES and WIN32 then
-	function os.spawn(cmd, ...)
-		local cwd = lfs.currentdir()
-		local args, i = {...}, 1
-		if type(args[i]) == 'string' then
-			lfs.chdir(args[i]) -- cwd
-			i = i + 1
-		end
-		if type(args[i]) == 'table' then i = i + 1 end -- env (ignore)
-		local p = io.popen(assert_type(cmd, 'string', 1) .. ' 2>&1')
-		local output = p:read('a'):gsub('\r?\n', '\r\n') -- ensure \r\n
-		if type(args[i]) == 'function' then args[i](output) end -- stdout_cb
-		local status = select(3, p:close())
-		if type(args[i + 2]) == 'function' then args[i + 2](status) end -- exit_cb
-		lfs.chdir(cwd) -- restore
-		local noop = function() end
-		return {
-			read = function() return output end, status = function() return 'terminated' end,
-			wait = function() return status end, write = noop, close = noop, kill = noop
-		}
-	end
-end
 
 --- Replacement for original `buffer:text_range()`, which has a C struct for an argument.
 -- Documentation is in core/.buffer.luadoc.
@@ -60,6 +36,29 @@ local function text_range(buffer, start_pos, end_pos)
 end
 
 events.connect(events.BUFFER_NEW, function() buffer.text_range = text_range end, 1)
+
+-- Implement `events.BUFFER_{BEFORE,AFTER}_REPLACE_TEXT` as a convenience in lieu of the
+-- undocumented `events.MODIFIED`.
+local DELETE, INSERT, UNDOREDO = _SCINTILLA.MOD_BEFOREDELETE, _SCINTILLA.MOD_INSERTTEXT,
+	_SCINTILLA.MULTILINEUNDOREDO
+--- Helper function for emitting `events.BUFFER_AFTER_REPLACE_TEXT` after a full-buffer undo/redo
+-- operation, e.g. after reloading buffer contents and then performing an undo.
+local function emit_after_replace_text()
+	events.disconnect(events.UPDATE_UI, emit_after_replace_text)
+	events.emit(events.BUFFER_AFTER_REPLACE_TEXT)
+end
+-- Emits events prior to and after replacing buffer text.
+events.connect(events.MODIFIED, function(position, mod, text, length)
+	if mod & (DELETE | INSERT) == 0 or length ~= buffer.length then return end
+	if mod & (INSERT | UNDOREDO) == INSERT | UNDOREDO then
+		-- Cannot emit BUFFER_AFTER_REPLACE_TEXT here because Scintilla will do things like update
+		-- the selection afterwards, which could undo what event handlers do.
+		events.connect(events.UPDATE_UI, emit_after_replace_text)
+		return
+	end
+	events.emit(mod & DELETE > 0 and events.BUFFER_BEFORE_REPLACE_TEXT or
+		events.BUFFER_AFTER_REPLACE_TEXT)
+end)
 
 --- A table of style properties that can be concatenated with other tables of properties.
 local style_object = {}
@@ -199,7 +198,12 @@ end, 1)
 -- @param to Index to move the buffer to.
 -- @function move_buffer
 
---- Emits `events.QUIT`, and unless any handler returns `false`, quits Textadept.
+--- Attempts to quit Textadept.
+-- Emits `events.QUIT` unless *events* is `false`.
+-- @param[opt] status Optional status code for Textadept to exit with. The default value is 0.
+-- @param[optchain] events Optional flag that indicates whether or not to emit `events.QUIT`,
+-- which could prevent quitting. Passing `false` is not recommended and could result in data
+-- loss. The default value is `true`.
 -- @function quit
 
 --- Resets the Lua State by reloading all initialization scripts.
@@ -211,6 +215,8 @@ end, 1)
 --- Calls function *f* with the given arguments after *interval* seconds.
 -- If *f* returns `true`, calls *f* repeatedly every *interval* seconds as long as *f* returns
 -- `true`. A `nil` or `false` return value stops repetition.
+-- Note: in the terminal version, timeout functions will not be called until an active Find &
+-- Replace pane session finishes, and until an active dialog closes.
 -- @param interval The interval in seconds to call *f* after.
 -- @param f The function to call.
 -- @param[opt] ... Additional arguments to pass to *f*.

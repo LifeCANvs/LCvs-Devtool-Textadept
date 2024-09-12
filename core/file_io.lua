@@ -37,6 +37,12 @@ for _, v in ipairs(file_io_events) do events[v:upper()] = v end
 -- - *filename*: The filename externally modified.
 -- @field _G.events.FILE_CHANGED
 
+--- Whether or not to attempt to detect indentation settings for opened files.
+-- If any non-blank line starts with a tab, tabs are used. Otherwise, for the first non-blank
+-- line that starts with between two and eight spaces, that number of spaces is used.
+-- The default value is `true`.
+io.detect_indentation = true
+
 --- Whether or not to ensure there is a final newline when saving text files.
 -- This has no effect on binary files.
 -- The default value is `false` on Windows, and `true` on Linux and macOS.
@@ -74,19 +80,15 @@ io.encodings = {'UTF-8', 'ASCII', 'CP1252', 'UTF-16'}
 -- Emits `events.FILE_OPENED`.
 -- @param[opt] filenames Optional string filename or table of filenames to open. If `nil`,
 --	the user is prompted with a fileselect dialog.
--- @param[optchain] encodings Optional string encoding or table of encodings file contents are in
---	(one encoding per file). If `nil`, encoding auto-detection is attempted via `io.encodings`.
-function io.open_file(filenames, encodings)
-	assert_type(encodings, 'string/table/nil', 2)
+function io.open_file(filenames)
 	if not assert_type(filenames, 'string/table/nil', 1) then
 		filenames = ui.dialogs.open{
 			title = _L['Open File'], multiple = true,
-			dir = (buffer.filename or ''):match('^.+[/\\]') or lfs.currentdir()
+			dir = (buffer.filename or ''):match('^(.+)[/\\]') or lfs.currentdir()
 		}
 		if not filenames then return end
 	end
 	if type(filenames) == 'string' then filenames = {filenames} end
-	if type(encodings) ~= 'table' then encodings = {encodings} end
 	for i = 1, #filenames do
 		local filename = lfs.abspath((filenames[i]:gsub('^file://', '')))
 		for _, buffer in ipairs(_BUFFERS) do
@@ -98,32 +100,33 @@ function io.open_file(filenames, encodings)
 
 		local text = ''
 		if lfs.attributes(filename) then
-			local f, errmsg = io.open(filename, 'rb')
+			local f<close>, errmsg = io.open(filename, 'rb')
 			if not f then error(string.format('cannot open %s', errmsg), 2) end
 			text = f:read('a')
-			f:close()
 			if not text then goto continue end -- filename exists, but cannot read it
 		end
 		local buffer = buffer.new()
-		if encodings[i] then
-			buffer.encoding, text = encodings[i], text:iconv('UTF-8', encodings[i])
-		else
-			-- Try to detect character encoding and convert to UTF-8.
-			local has_zeroes = text:sub(1, 65535):find('\0')
-			for _, encoding in ipairs(io.encodings) do
-				if not has_zeroes or encoding:find('^UTF') then
-					local ok, conv = pcall(string.iconv, text, 'UTF-8', encoding)
-					if ok then
-						buffer.encoding, text = encoding, conv
-						goto encoding_detected
-					end
-				end
-			end
-			assert(has_zeroes, _L['Encoding conversion failed.'])
-			buffer.encoding = nil -- binary (default was 'UTF-8')
+		-- Try to detect character encoding and convert to UTF-8.
+		-- A nil encoding means the file is treated as a binary file.
+		local encoding, has_zeroes = nil, text:sub(1, 65535):find('\0')
+		for _, enc in ipairs(io.encodings) do
+			if has_zeroes and not enc:find('^UTF') then goto continue end -- non-UTF cannot handle \0
+			local ok, conv = pcall(string.iconv, text, 'UTF-8', enc)
+			if not ok then goto continue end
+			encoding, text = enc, conv
+			break
+			::continue::
 		end
-		::encoding_detected::
-		buffer.code_page = buffer.encoding and buffer.CP_UTF8 or 0
+		buffer.encoding, buffer.code_page = encoding, encoding and buffer.CP_UTF8 or 0
+		-- Detect indentation.
+		if io.detect_indentation then
+			if text:find('\n\t+%S') then
+				buffer.use_tabs = true
+			else
+				local s, e = text:find('\n()   ? ? ? ? ? ?()%S')
+				if s and e then buffer.use_tabs, buffer.tab_width = false, e - 1 - s end
+			end
+		end
 		-- Detect EOL mode.
 		local s, e = text:find('\r?\n')
 		if s then buffer.eol_mode = buffer[s ~= e and 'EOL_CRLF' or 'EOL_LF'] end
@@ -153,9 +156,8 @@ end
 local function reload(buffer)
 	if not buffer then buffer = _G.buffer end
 	if not buffer.filename then return end
-	local f = assert(io.open(buffer.filename, 'rb'))
+	local f<close> = assert(io.open(buffer.filename, 'rb'))
 	local text = f:read('a')
-	f:close()
 	if buffer.encoding then text = text:iconv('UTF-8', buffer.encoding) end
 	buffer:target_whole_document()
 	buffer:replace_target(text)
@@ -167,18 +169,24 @@ end
 local function set_encoding(buffer, encoding)
 	assert_type(encoding, 'string/nil', 1)
 	local pos, first_visible_line = buffer.current_pos, view.first_visible_line
-	local text = buffer:get_text()
+	local text, changed = buffer:get_text(), false
 	if buffer.encoding then
 		text = text:iconv(buffer.encoding, 'UTF-8')
-		if encoding then text = text:iconv(encoding, buffer.encoding) end
+		-- Some single-byte to multi-byte transforms need an extra conversion step
+		-- (e.g. CP1252 to UTF-16), but other single-byte to single-byte transforms do
+		-- not (e.g. CP1252 to CP936).
+		if encoding then
+			local ok, conv = pcall(string.iconv, text, encoding, buffer.encoding)
+			if ok then text, changed = conv, true end
+		end
 	end
 	if encoding then text = text:iconv('UTF-8', encoding) end
 	buffer:target_whole_document()
 	buffer:replace_target(text)
 	buffer:goto_pos(pos)
 	view.first_visible_line = first_visible_line
-	buffer.encoding = encoding
-	buffer.code_page = buffer.encoding and buffer.CP_UTF8 or 0
+	buffer.encoding, buffer.code_page = encoding, encoding and buffer.CP_UTF8 or 0
+	if not changed then buffer:set_save_point() end
 end
 
 -- LuaDoc is in core/.buffer.luadoc.
@@ -203,7 +211,7 @@ end
 -- LuaDoc is in core/.buffer.luadoc.
 local function save_as(buffer, filename)
 	if not buffer then buffer = _G.buffer end
-	local dir, name = (buffer.filename or lfs.currentdir() .. '/'):match('^(.-[/\\]?)([^/\\]*)$')
+	local dir, name = (buffer.filename or lfs.currentdir() .. '/'):match('^(.-)[/\\]?([^/\\]*)$')
 	if not assert_type(filename, 'string/nil', 1) then
 		filename = ui.dialogs.save{title = _L['Save File'], dir = dir, file = name}
 		if not filename then return end
@@ -265,6 +273,17 @@ events.connect(events.VIEW_AFTER_SWITCH, update_modified_file)
 events.connect(events.FOCUS, update_modified_file)
 events.connect(events.RESUME, update_modified_file)
 
+-- Prompts the user to reload the current file if it has been externally modified.
+events.connect(events.FILE_CHANGED, function(filename)
+	local button = ui.dialogs.message{
+		title = _L['Reload modified file?'],
+		text = string.format('"%s"\n%s', filename:iconv('UTF-8', _CHARSET),
+			_L['has been modified. Reload it?']), icon = 'dialog-question', button1 = _L['Yes'],
+		button2 = _L['No']
+	}
+	if button == 1 then buffer:reload() end
+end)
+
 --- Closes all open buffers, prompting the user to continue if there are unsaved buffers, and
 -- returns `true` if the user did not cancel.
 -- No buffers are saved automatically. They must be saved manually.
@@ -287,22 +306,12 @@ end)
 -- access buffer functions before the first `events.BUFFER_NEW` is emitted.
 io._reload, io._save, io._save_as, io._close = reload, save, save_as, close
 
--- Prompts the user to reload the current file if it has been externally modified.
-events.connect(events.FILE_CHANGED, function(filename)
-	local button = ui.dialogs.message{
-		title = _L['Reload modified file?'],
-		text = string.format('"%s"\n%s', filename:iconv('UTF-8', _CHARSET),
-			_L['has been modified. Reload it?']), icon = 'dialog-question', button1 = _L['Yes'],
-		button2 = _L['No']
-	}
-	if button == 1 then buffer:reload() end
-end)
-
 -- Closes the initial "Untitled" buffer when another buffer is opened.
 events.connect(events.FILE_OPENED, function()
 	if #_BUFFERS > 2 then return end
-	local buf = _BUFFERS[1]
-	if not (buf.filename or buf._type or buf.modify or buf.length > 0) then buf:close() end
+	local buffer = _BUFFERS[1]
+	if buffer.filename or buffer._type or buffer.modify or buffer.length > 0 then return end
+	buffer:close()
 end)
 
 --- Prompts the user to select a recently opened file to be reopened.

@@ -343,9 +343,7 @@ private:
 	QTimer *timer;
 };
 
-bool add_timeout(double interval, bool (*f)(int *), int *refs) {
-	return (new Timeout{interval, f, refs}, true);
-}
+void add_timeout(double interval, bool (*f)(int *), int *refs) { new Timeout{interval, f, refs}; }
 
 void update_ui() { QApplication::sendPostedEvents(), QApplication::processEvents(); }
 
@@ -704,9 +702,7 @@ Textadept::Textadept(QWidget *parent) : QMainWindow{parent}, ui{new Ui::Textadep
 }
 
 void Textadept::closeEvent(QCloseEvent *ev) {
-	// Note: lua may be NULL due to Qt session manager doing odd things on logout/restart while
-	// Textadept is still running.
-	if (lua && emit("quit", -1)) ev->ignore();
+	if (!can_quit()) ev->ignore();
 }
 
 void Textadept::keyPressEvent(QKeyEvent *ev) {
@@ -730,7 +726,17 @@ public:
 		}
 		if (inited = init_textadept(argc, argv); !inited) return;
 		setApplicationName("Textadept");
+#if !__APPLE__
 		setWindowIcon(QIcon{QString{textadept_home} + "/core/images/textadept.svg"});
+#else
+		setWindowIcon(QIcon{QString{textadept_home} + "/core/images/textadept_mac.png"});
+		// Read $PATH from shell since macOS GUI apps run in a limited environment.
+		QProcess p;
+		p.startCommand(qgetenv("SHELL") + " -l -c env"), p.waitForFinished();
+		QRegularExpression re{"^([^=]+)=(.+)$", QRegularExpression::MultilineOption};
+		for (const auto &match : re.globalMatch(p.readAll()))
+			qputenv(match.captured(1).toLocal8Bit(), match.captured(2).toLocal8Bit());
+#endif
 		connect(this, &SingleApplication::receivedMessage, this, [](quint32, QByteArray message) {
 			ta->window()->activateWindow();
 			QDataStream in{&message, QIODevice::ReadOnly};
@@ -757,15 +763,12 @@ public:
 		connect(this, &QApplication::aboutToQuit, this, &close_textadept);
 		// There is a bug in Qt where a tab scroll button could have focus at this time.
 		if (!SCI(focused_view)->hasFocus()) SCI(focused_view)->setFocus();
-#if _WIN32
-		setStyle(QStyleFactory::create("Fusion"));
-#endif
 	}
 	~Application() override {
 		if (inited) delete ta;
 	}
 
-	int exec() { return inited ? QApplication::exec() : exit_status; }
+	int exec() { return inited ? (QApplication::exec(), exit_status) : exit_status; }
 
 protected:
 	bool event(QEvent *event) override {

@@ -3,24 +3,26 @@
 
 #include "textadept.h"
 
-#include "lauxlib.h" // for luaL_ref
+#include "lauxlib.h"
 #include "ScintillaCurses.h"
+#include "cdk_int.h"
+#include "reproc/run.h"
 #include "termkey.h"
 
 #include <locale.h>
 #include <math.h> // for fmax
 #if !_WIN32
-#include <signal.h>
+#include <poll.h>
+#include <signal.h> // needed on macOS
 #include <sys/ioctl.h>
+#include <sys/time.h> // for gettimeofday
 #include <sys/wait.h>
 #else
-#include <windows.h>
 #include <direct.h>
 #define strncasecmp _strnicmp
 #define getcwd _getcwd
 #define chdir _chdir
 #endif
-#include "cdk_int.h" // must come after <windows.h>
 
 // Curses objects.
 static Pane *root_pane;
@@ -44,10 +46,11 @@ struct Pane {
 	SciObject *view; // Scintilla view for a non-split view
 	struct Pane *child1, *child2; // each pane in a split view
 }; // Pane implementation based on code by Chris Emerson.
+static inline struct Pane *PANE(struct Pane *pane) { return pane; }
 
-const char *get_platform() { return "CURSES"; }
+const char *get_platform(void) { return "CURSES"; }
 
-const char *get_charset() {
+const char *get_charset(void) {
 #if !_WIN32
 	const char *charset = getenv("CHARSET");
 	if (!charset || !*charset) {
@@ -101,7 +104,7 @@ void set_title(const char *title) {
 	mvaddstr(0, 0, title), refresh();
 }
 
-bool is_maximized() { return false; }
+bool is_maximized(void) { return false; }
 
 void set_maximized(bool maximize) {}
 
@@ -132,14 +135,12 @@ static struct Pane *get_parent_pane(struct Pane *pane, SciObject *view) {
 
 // Redraws the given pane and its children.
 static void refresh_pane(struct Pane *pane) {
-	if (pane->type == VSPLIT) {
-		mvwvline(pane->win, 0, 0, 0, pane->rows), wrefresh(pane->win);
-		refresh_pane(pane->child1), refresh_pane(pane->child2);
-	} else if (pane->type == HSPLIT) {
-		mvwhline(pane->win, 0, 0, 0, pane->cols), wrefresh(pane->win);
-		refresh_pane(pane->child1), refresh_pane(pane->child2);
-	} else
-		scintilla_noutrefresh(pane->view);
+	switch (pane->type) {
+	case SINGLE: scintilla_noutrefresh(pane->view); return;
+	case VSPLIT: mvwvline(pane->win, 0, 0, 0, pane->rows), wrefresh(pane->win); break;
+	case HSPLIT: mvwhline(pane->win, 0, 0, 0, pane->cols), wrefresh(pane->win); break;
+	}
+	refresh_pane(pane->child1), refresh_pane(pane->child2);
 }
 
 void split_view(SciObject *view, SciObject *view2, bool vertical) {
@@ -167,14 +168,14 @@ void split_view(SciObject *view, SciObject *view2, bool vertical) {
 
 // Removes all Scintilla views from the given pane and deletes them along with the child panes
 // themselves.
-static void remove_views(Pane *pane_, void (*delete_view)(SciObject *view)) {
-	struct Pane *pane = pane_;
-	if (pane->type == VSPLIT || pane->type == HSPLIT) {
-		remove_views(pane->child1, delete_view), remove_views(pane->child2, delete_view);
-		delwin(pane->win), pane->win = NULL; // delete split bar
-	} else
-		delete_view(pane->view);
-	free(pane);
+static void remove_views(Pane *pane, void (*delete_view)(SciObject *view)) {
+	switch (PANE(pane)->type) {
+	case SINGLE: delete_view(PANE(pane)->view); break;
+	default: // VSPLIT || HSPLIT
+		remove_views(PANE(pane)->child1, delete_view), remove_views(PANE(pane)->child2, delete_view);
+		delwin(PANE(pane)->win), PANE(pane)->win = NULL; // delete split bar
+	}
+	free(PANE(pane));
 }
 
 bool unsplit_view(SciObject *view, void (*delete_view)(SciObject *)) {
@@ -185,9 +186,8 @@ bool unsplit_view(SciObject *view, void (*delete_view)(SciObject *)) {
 	remove_views(child == parent->child1 ? parent->child2 : parent->child1, delete_view);
 	delwin(parent->win); // delete split bar
 	// Inherit child's properties.
-	parent->type = child->type, parent->split_size = child->split_size;
-	parent->win = child->win, parent->view = child->view;
-	parent->child1 = child->child1, parent->child2 = child->child2;
+	parent->type = child->type, parent->split_size = child->split_size, parent->win = child->win,
+	parent->view = child->view, parent->child1 = child->child1, parent->child2 = child->child2;
 	free(child);
 	resize_pane(parent, parent->rows, parent->cols, parent->y, parent->x); // update
 	return (scintilla_noutrefresh(view), true);
@@ -195,12 +195,11 @@ bool unsplit_view(SciObject *view, void (*delete_view)(SciObject *)) {
 
 void delete_scintilla(SciObject *view) { scintilla_delete(view); }
 
-Pane *get_top_pane() { return root_pane; }
+Pane *get_top_pane(void) { return root_pane; }
 
-PaneInfo get_pane_info(Pane *pane_) {
-	struct Pane *pane = pane_;
-	PaneInfo info = {pane->type != SINGLE, pane->type == VSPLIT, pane->view, pane, pane->child1,
-		pane->child2, pane->split_size};
+PaneInfo get_pane_info(Pane *pane) {
+	PaneInfo info = {PANE(pane)->type != SINGLE, PANE(pane)->type == VSPLIT, PANE(pane)->view,
+		PANE(pane), PANE(pane)->child1, PANE(pane)->child2, PANE(pane)->split_size};
 	return info;
 }
 
@@ -208,14 +207,14 @@ PaneInfo get_pane_info_from_view(SciObject *v) {
 	return get_pane_info(get_parent_pane(root_pane, v));
 }
 
-void set_pane_size(Pane *pane_, int size) {
-	struct Pane *pane = pane_;
-	pane->split_size = size, resize_pane(pane, pane->rows, pane->cols, pane->y, pane->x);
+void set_pane_size(Pane *pane, int size) {
+	PANE(pane)->split_size = size;
+	resize_pane(PANE(pane), PANE(pane)->rows, PANE(pane)->cols, PANE(pane)->y, PANE(pane)->x);
 }
 
 void show_tabs(bool show) {}
 
-void add_tab() {}
+void add_tab(void) {}
 
 void set_tab(int index) {}
 
@@ -233,8 +232,8 @@ static void copyfree(char **s, const char *value) {
 	*s = strcpy(malloc(strlen(value) + 1), value);
 }
 
-const char *get_find_text() { return find_text; }
-const char *get_repl_text() { return repl_text; }
+const char *get_find_text(void) { return find_text; }
+const char *get_repl_text(void) { return repl_text; }
 void set_find_text(const char *text) { copyfree(&find_text, text); }
 void set_repl_text(const char *text) { copyfree(&repl_text, text); }
 
@@ -271,10 +270,9 @@ void set_option_label(FindOption *option, const char *text) {
 }
 
 // Refreshes the entire screen.
-static void refresh_all() {
-	refresh_pane(root_pane);
+static void refresh_all(void) {
+	refresh_pane(root_pane), refresh();
 	if (command_entry_active) scintilla_noutrefresh(command_entry);
-	refresh();
 	if (!findbox) scintilla_update_cursor(!command_entry_active ? focused_view : command_entry);
 }
 
@@ -322,7 +320,7 @@ static int find_keypress(EObjectType _, void *object, void *data, chtype key) {
 	return true;
 }
 
-void focus_find() {
+void focus_find(void) {
 	if (findbox) return; // already active
 	wresize(scintilla_get_window(focused_view), LINES - 4, COLS);
 	findbox = initCDKScreen(newwin(2, 0, LINES - 3, 0)), eraseCDKScreen(findbox);
@@ -336,11 +334,10 @@ void focus_find() {
 		A_NORMAL, '_', vMIXED, e_width, 0, 1024, false, false);
 	repl_entry = newCDKEntry(findbox, (int)(l_width - strlen(repl_label)), BOTTOM, NULL, repl_label,
 		A_NORMAL, '_', vMIXED, e_width, 0, 1024, false, false);
-	CDKBUTTONBOX *buttonbox, *optionbox;
-	buttonbox = newCDKButtonbox(findbox, COLS - o_width - b_width, TOP, 2, b_width, NULL, 2, 2,
-		button_labels, 4, A_REVERSE, false, false);
-	optionbox = newCDKButtonbox(
-		findbox, RIGHT, TOP, 2, o_width, NULL, 2, 2, option_labels, 4, A_NORMAL, false, false);
+	CDKBUTTONBOX *buttonbox = newCDKButtonbox(findbox, COLS - o_width - b_width, TOP, 2, b_width,
+								 NULL, 2, 2, button_labels, 4, A_REVERSE, false, false),
+							 *optionbox = newCDKButtonbox(findbox, RIGHT, TOP, 2, o_width, NULL, 2, 2,
+								 option_labels, 4, A_NORMAL, false, false);
 // TODO: ideally no #define here.
 #define bind(k, d) \
 	(bindCDKObject(vENTRY, find_entry, k, find_keypress, d), \
@@ -369,20 +366,19 @@ void focus_find() {
 	destroyCDKEntry(find_entry), destroyCDKEntry(repl_entry);
 	destroyCDKButtonbox(buttonbox), destroyCDKButtonbox(optionbox);
 	delwin(findbox->window), destroyCDKScreen(findbox), findbox = NULL;
-	timeout(0), getch(), timeout(-1); // flush potential extra Escape
 	wresize(scintilla_get_window(focused_view), LINES - 2, COLS);
 }
 
-bool is_find_active() { return findbox != NULL; }
+bool is_find_active(void) { return findbox != NULL; }
 
-void focus_command_entry() {
+void focus_command_entry(void) {
 	if (!(command_entry_active = !command_entry_active)) SS(command_entry, SCI_SETFOCUS, 0, 0);
 	focus_view(command_entry_active ? command_entry : focused_view);
 }
 
-bool is_command_entry_active() { return command_entry_active; }
+bool is_command_entry_active(void) { return command_entry_active; }
 
-int get_command_entry_height() { return getmaxy(scintilla_get_window(command_entry)); }
+int get_command_entry_height(void) { return getmaxy(scintilla_get_window(command_entry)); }
 
 void set_command_entry_height(int height) {
 	WINDOW *win = scintilla_get_window(command_entry);
@@ -404,48 +400,24 @@ void popup_menu(void *menu, void *userdata) {}
 
 void set_menubar(lua_State *L, int index) {}
 
+char *get_clipboard_text(int *len) { return scintilla_get_clipboard(focused_view, len); }
+
 // Contains information about an active process.
 struct Process {
-	int pid, fstdin, fstdout, fstderr, exit_status;
-	bool monitor_stdout, monitor_stderr;
+	reproc_t *reproc;
+	bool running, monitor_stdout, monitor_stderr;
 };
 static inline struct Process *PROCESS(struct Process *proc) { return proc; }
-
-#if !_WIN32
-// Pushes the list of spawned processes onto the stack.
-void lua_getspawnedprocesses(lua_State *L) {
-	if (!lua_getfield(L, LUA_REGISTRYINDEX, "spawn_procs"))
-		lua_newtable(L), lua_pushvalue(L, -1), lua_setfield(L, LUA_REGISTRYINDEX, "spawn_procs");
-}
-
-// Creates and returns an `fd_set` for all spawned processes that can be used with `select()`
-// and `read_fds()` to wait for input or output.
-// The caller is expected to free the returned pointer.
-fd_set *new_fds(int *nfds) {
-	*nfds = 0;
-	fd_set *fds = malloc(sizeof(fd_set));
-	FD_ZERO(fds); // TODO: is calloc enough?
-	lua_getspawnedprocesses(lua);
-	for (lua_pushnil(lua); lua_next(lua, -2); lua_pop(lua, 1)) {
-		struct Process *proc = lua_touserdata(lua, -2);
-		// Note: need to read from pipes so they do not get clogged, even if monitoring is not
-		// requested.
-		FD_SET(proc->fstdout, fds); // note: this is a do/while macro on OSX
-		*nfds = fmax(*nfds, proc->fstdout + 1);
-		FD_SET(proc->fstderr, fds); // note: this is a do/while macro on OSX
-		*nfds = fmax(*nfds, proc->fstderr + 1);
-	}
-	return (lua_pop(lua, 1), fds); // spawned processes
-}
 
 // Signal that a process has output to read.
 static void read_proc(struct Process *proc, bool is_stdout) {
 	char buf[BUFSIZ];
-	ssize_t len;
+	int len;
 	do {
 		// Note: need to read from pipes to prevent clogging, but only report output if monitoring.
+		REPROC_STREAM stream = is_stdout ? REPROC_STREAM_OUT : REPROC_STREAM_ERR;
 		bool monitoring = is_stdout ? proc->monitor_stdout : proc->monitor_stderr;
-		if ((len = read(is_stdout ? proc->fstdout : proc->fstderr, buf, BUFSIZ)) > 0 && monitoring)
+		if ((len = reproc_read(proc->reproc, stream, (uint8_t *)buf, BUFSIZ)) > 0 && monitoring)
 			process_output(proc, buf, len, is_stdout);
 	} while (len == BUFSIZ);
 }
@@ -453,54 +425,84 @@ static void read_proc(struct Process *proc, bool is_stdout) {
 // Cleans up after the process finished executing and returned the given status code.
 static void process_finished(struct Process *proc, int status) {
 	// Stop tracking and monitoring this proc.
-	lua_getspawnedprocesses(lua);
+	luaL_getsubtable(lua, LUA_REGISTRYINDEX, "spawn_procs");
 	for (lua_pushnil(lua); lua_next(lua, -2); lua_pop(lua, 1))
-		if (((struct Process *)lua_touserdata(lua, -2))->pid == proc->pid) {
+		if (PROCESS(lua_touserdata(lua, -2))->reproc == proc->reproc) {
 			lua_pushnil(lua), lua_replace(lua, -2), lua_settable(lua, -3); // t[proc] = nil
 			break;
 		}
-	lua_pop(lua, 1); // spawned processes
-	proc->pid = 0, close(proc->fstdin), close(proc->fstdout), close(proc->fstderr);
-	process_exited(proc, proc->exit_status = status);
+	lua_pop(lua, 1), process_exited(proc, status), proc->running = false; // pop spawn_procs
 }
 
-// Reads output from the given fd_set and returns the number of fds read from.
-// Also monitors child processes for completion and cleans up after them.
-int read_fds(fd_set *fds) {
-	int n = 0;
-	lua_getspawnedprocesses(lua);
-	for (lua_pushnil(lua); lua_next(lua, -2); lua_pop(lua, 1)) {
-		struct Process *proc = lua_touserdata(lua, -2);
-		// Read output if any is available.
-		if (FD_ISSET(proc->fstdout, fds)) read_proc(proc, true), n++;
-		if (FD_ISSET(proc->fstderr, fds)) read_proc(proc, false), n++;
-		// Check process status. If finished, read anything left and cleanup.
-		int status;
-		if (waitpid(proc->pid, &status, WNOHANG) > 0) {
-			read_proc(proc, true), read_proc(proc, false), process_finished(proc, status);
-			lua_pushnil(lua), lua_replace(lua, -3); // key no longer exists
-		}
+// Iterates over all spawned processes, reads any unread output, monitors for process exit,
+// and returns true if it did something that may warrant a call to `refresh_all()`.
+static bool lua_processprocs(lua_State *L) {
+	bool refresh = false;
+	luaL_getsubtable(L, LUA_REGISTRYINDEX, "spawn_procs");
+	for (lua_pushnil(L); lua_next(L, -2); lua_pop(L, 1)) {
+		struct Process *proc = lua_touserdata(L, -2);
+		reproc_event_source event = {proc->reproc, REPROC_EVENT_OUT | REPROC_EVENT_ERR, 0};
+		reproc_poll(&event, 1, 0);
+		if (event.events & REPROC_EVENT_OUT) read_proc(proc, true), refresh = true;
+		if (event.events & REPROC_EVENT_ERR) read_proc(proc, false), refresh = true;
+		int status = reproc_wait(proc->reproc, 0);
+		if (status == REPROC_ETIMEDOUT) continue; // still running
+		read_proc(proc, true), read_proc(proc, false), process_finished(proc, status), refresh = true;
+		lua_pushnil(L), lua_replace(L, -3); // key no longer exists
 	}
-	return (lua_pop(lua, 1), n); // spawned processes
+	return (lua_pop(L, 1), refresh); // pop spawn_procs
 }
-#endif
 
-char *get_clipboard_text(int *len) { return scintilla_get_clipboard(focused_view, len); }
+// Contains information about an active timeout.
+typedef struct {
+	double s, interval;
+	bool (*f)(int *);
+	int *refs;
+} TimeoutData;
 
-bool add_timeout(double interval, bool (*f)(int *), int *refs) { return false; }
-
-void update_ui() {
+// Returns a number of seconds for use in computing time deltas.
+static double get_seconds(void) {
 #if !_WIN32
-	struct timeval timeout = {0, 1e5}; // 0.1s
-	int nfds;
-	fd_set *fds = new_fds(&nfds);
-	while (select(nfds, fds, NULL, NULL, &timeout) > 0)
-		if (read_fds(fds) >= 0) refresh_all();
-	free(fds);
+	struct timeval time;
+	gettimeofday(&time, NULL);
+	return time.tv_sec + time.tv_usec / 1.0e6;
+#else
+	FILETIME time;
+	GetSystemTimeAsFileTime(&time);
+	// Note: interval is time.Low | (time.High << 32) in 100's of nanoseconds.
+	return (time.dwLowDateTime + time.dwHighDateTime * 4294967296.0) / 1.0e7;
 #endif
 }
 
-bool is_dark_mode() { return true; } // TODO:
+// Iterates over all timeout functions, calling them if enough time has passed (and removing
+// them if they should not run again), and returns true if it did something that may warrant
+// a call to `refresh_all()`.
+static bool lua_processtimeouts(lua_State *L) {
+	bool refresh = false;
+	luaL_getsubtable(L, LUA_REGISTRYINDEX, "timeouts");
+	for (lua_pushnil(L); lua_next(L, -2); lua_pop(L, 1)) {
+		TimeoutData *timeout = lua_touserdata(L, -2);
+		if (get_seconds() - timeout->s < timeout->interval) continue;
+		if (timeout->s = get_seconds(), refresh = true, !timeout->f(timeout->refs))
+			lua_pushvalue(L, -2), lua_pushnil(L), lua_settable(L, -5); // t[timeout] = nil
+	}
+	return (lua_pop(L, 1), refresh); // pop timeouts
+}
+
+void add_timeout(double interval, bool (*f)(int *), int *refs) {
+	luaL_getsubtable(lua, LUA_REGISTRYINDEX, "timeouts");
+	TimeoutData *timeout = lua_newuserdata(lua, sizeof(TimeoutData));
+	timeout->s = get_seconds(), timeout->interval = interval, timeout->f = f, timeout->refs = refs;
+	lua_pushboolean(lua, 1), lua_settable(lua, -3); // t[timeout] = true
+	lua_pop(lua, 1); // timeouts
+}
+
+void update_ui(void) {
+	if (lua_processprocs(lua)) refresh_all();
+	if (lua_processtimeouts(lua)) refresh_all();
+}
+
+bool is_dark_mode(void) { return true; } // TODO:
 
 // Contains information about a generic dialog shell.
 // Widgets can be added to its 'screen' field.
@@ -522,12 +524,11 @@ static int read_buttons(DialogOptions *opts, const char *rtl_labels[3]) {
 
 int message_dialog(DialogOptions opts, lua_State *L) {
 	const char *rtl_buttons[3];
-	int num_buttons = read_buttons(&opts, rtl_buttons), lines = 2;
+	int num_buttons = read_buttons(&opts, rtl_buttons), lines = 2, i = 0;
 	char *text = strcpy(malloc((opts.text ? strlen(opts.text) : 0) + 1), opts.text ? opts.text : "");
 	for (const char *p = text; *p; p++)
 		if (*p == '\n') lines++;
 	const char **message = malloc(lines * sizeof(const char *));
-	int i = 0;
 	message[i++] = opts.title, message[i++] = text;
 	for (char *p = text; *p; p++)
 		if (*p == '\n') *p = '\0', message[i++] = p + 1;
@@ -542,8 +543,8 @@ int message_dialog(DialogOptions opts, lua_State *L) {
 
 // Returns a new dialog with given specified dimensions.
 static Dialog new_dialog(DialogOptions *opts, int height, int width) {
-	Dialog dialog;
-	dialog.border = newwin(height, width, 1, 1), dialog.content = newwin(height - 2, width - 2, 2, 2);
+	Dialog dialog = {
+		.border = newwin(height, width, 1, 1), .content = newwin(height - 2, width - 2, 2, 2)};
 	dialog.screen = initCDKScreen(dialog.content);
 	const char *rtl_buttons[3];
 	int num_buttons = read_buttons(opts, rtl_buttons);
@@ -599,9 +600,8 @@ static int open_save(DialogOptions *opts, lua_State *L, bool open) {
 	if (opts->dir) setCDKFselectDirectory(select, (char *)opts->dir);
 	if (opts->file) {
 		char *dir = dirName((char *)opts->file);
-		setCDKFselectDirectory(select, dir);
+		setCDKFselectDirectory(select, dir), free(dir);
 		// TODO: select file in the list.
-		free(dir);
 	}
 	lua_pushstring(L, activateCDKFselect(select, NULL)); // returns NULL/pushes nil if canceled
 	if (select->exitType == vNORMAL && opts->only_dirs)
@@ -623,25 +623,20 @@ int progress_dialog(
 	Dialog dialog = new_dialog(&opts, 10, 40);
 	CDKSLIDER *bar = newCDKSlider(dialog.screen, LEFT, TOP, (char *)opts.title, "", ' ' | A_REVERSE,
 		0, 0, 0, 100, 1, 2, false, false);
-	bool stop = false;
 	while (work(update, bar)) {
 		draw_dialog(&dialog);
 		int key;
 		timeout(0), key = getch(), timeout(-1);
-		if (key == KEY_ENTER || key == '\n') {
-			stop = true;
-			break;
-		}
+		if (key == KEY_ENTER || key == '\n') // stopped
+			return (destroyCDKSlider(bar), destroy_dialog(&dialog), lua_pushboolean(L, true), 1);
 	}
-	return (destroyCDKSlider(bar), destroy_dialog(&dialog), stop ? (lua_pushboolean(L, true), 1) : 0);
+	return (destroyCDKSlider(bar), destroy_dialog(&dialog), 0);
 }
 
 // Signals a scroll view to process the given key as if it was pressed.
 static int scroll_keypress(EObjectType _, void *__, void *data, chtype key) {
-	HasFocusObj(ObjOf((CDKSCROLL *)data)) = true; // needed to draw highlight
-	injectCDKScroll((CDKSCROLL *)data, key);
-	HasFocusObj(ObjOf((CDKSCROLL *)data)) = false;
-	return true;
+	return (HasFocusObj(ObjOf((CDKSCROLL *)data)) = true, injectCDKScroll((CDKSCROLL *)data, key),
+		HasFocusObj(ObjOf((CDKSCROLL *)data)) = false, true); // focus needed to draw highlight
 }
 
 // Contains information about a list view.
@@ -696,7 +691,7 @@ int list_dialog(DialogOptions opts, lua_State *L) {
 	char **items = malloc(num_items * sizeof(char *));
 	for (int i = 1; i <= num_items; i++) {
 		const char *item = (lua_rawgeti(L, opts.items, i), lua_tostring(L, -1));
-		items[i - 1] = strcpy(malloc(strlen(item) + 1), item), lua_pop(L, 1); // item
+		items[i - 1] = strcpy(malloc(strlen(item) + 1), item), lua_pop(L, 1); // pop item
 	}
 	int num_rows = (num_items + num_columns - 1) / num_columns; // account for non-full rows
 	char **rows = malloc((1 + num_rows) * sizeof(char *)), // include header
@@ -728,7 +723,7 @@ int list_dialog(DialogOptions opts, lua_State *L) {
 			size_t padding = column_widths[j - i] - utf8strlen(item);
 			while (padding-- > 0) *p++ = ' ';
 			*p++ = (i < 0) ? '|' : ' ';
-			if (i < 0 && opts.columns) lua_pop(L, 1); // header
+			if (i < 0 && opts.columns) lua_pop(L, 1); // pop header
 		}
 		if (p > row) *(p - 1) = '\0';
 		rows[i / num_columns + 1] = row;
@@ -780,9 +775,11 @@ int list_dialog(DialogOptions opts, lua_State *L) {
 
 bool spawn(lua_State *L, Process *proc, int index, const char *cmd, const char *cwd, int envi,
 	bool monitor_stdout, bool monitor_stderr, const char **error) {
-#if !_WIN32
 	int argc = 0, top = lua_gettop(L);
 	// Construct argv from cmd and envp from envi.
+#if _WIN32
+	lua_pushstring(L, getenv("COMSPEC")), lua_pushstring(L, "/c"), argc += 2;
+#endif
 	const char *p = cmd;
 	while (*p) {
 		while (*p == ' ') p++;
@@ -802,120 +799,85 @@ bool spawn(lua_State *L, Process *proc, int index, const char *cmd, const char *
 		lua_checkstack(L, 1), luaL_pushresult(&buf), argc++;
 	}
 	int envc = envi ? lua_rawlen(L, envi) : 0;
-	char *argv[argc + 1], *envp[envc + 1];
+	char **argv = calloc(argc + 1, sizeof(char *)), **envp = calloc(envc + 1, sizeof(char *));
 	for (int i = 0; i < argc; i++) argv[i] = (char *)lua_tostring(L, top + 1 + i);
-	argv[argc] = NULL;
-	if (lua_checkstack(L, envc), envi)
+	if (lua_checkstack(L, envc + 2), envi) // extra stack slots needed for key-value pairs
 		for (int i = (lua_pushnil(L), 0); lua_next(L, envi); lua_pop(L, 1), i++)
 			envp[i] = (char *)(lua_pushvalue(L, -1), lua_insert(L, -3), lua_tostring(L, -3));
-	envp[envc] = NULL;
 
-	// Adapted from Chris Emerson and GLib.
-	// Attempt to create pipes for stdin, stdout, and stderr and fork process.
-	int pstdin[2] = {-1, -1}, pstdout[2] = {-1, -1}, pstderr[2] = {-1, -1}, pid = -1;
-	if (pipe(pstdin) == 0 && pipe(pstdout) == 0 && pipe(pstderr) == 0 && (pid = fork()) < 0) {
-		if (pstdin[0] >= 0) close(pstdin[0]), close(pstdin[1]);
-		if (pstdout[0] >= 0) close(pstdout[0]), close(pstdout[1]);
-		if (pstderr[0] >= 0) close(pstderr[0]), close(pstderr[1]);
-		return (*error = strerror(errno), false);
-	}
-	if (pid > 0) {
-		// Parent process: register child for monitoring its fds and pid.
-		close(pstdin[0]), close(pstdout[1]), close(pstderr[1]);
-		struct Process *p = proc;
-		p->pid = pid, p->fstdin = pstdin[1], p->fstdout = pstdout[0], p->fstderr = pstderr[0],
-		p->monitor_stdout = monitor_stdout, p->monitor_stderr = monitor_stderr;
-		lua_checkstack(L, 3), lua_getspawnedprocesses(lua), lua_pushvalue(L, index),
-			lua_pushboolean(L, 1), lua_settable(L, -3); // t[proc] = true
-		return true;
-	}
-	// Child process: redirect stdin, stdout, and stderr, chdir, and exec.
-	close(pstdin[1]), close(pstdout[0]), close(pstderr[0]), close(0), close(1), close(2);
-	dup2(pstdin[0], 0), dup2(pstdout[1], 1), dup2(pstderr[1], 2);
-	close(pstdin[0]), close(pstdout[1]), close(pstderr[1]);
-	if (cwd && chdir(cwd) < 0)
-		fprintf(stderr, "Failed to change directory '%s' (%s)", cwd, strerror(errno)), exit(1);
-	extern char **environ;
-#if __linux__
-	execvpe(argv[0], argv, envi ? envp : environ); // does not return on success
-#else
-	if (envi) environ = envp;
-	execvp(argv[0], argv); // does not return on success
-#endif
-	fprintf(stderr, "Failed to execute child process \"%s\" (%s)", argv[0], strerror(errno)), exit(1);
-#else // _WIN32
-	return (*error = "not implemented in this environment", false);
-#endif
+	struct Process *pr = memset(proc, 0, sizeof(struct Process));
+	pr->reproc = reproc_new();
+	reproc_options opts = {.working_directory = cwd, .redirect.err.type = REPROC_REDIRECT_PIPE};
+	if (envi) opts.env.behavior = REPROC_ENV_EMPTY, opts.env.extra = (const char **)envp;
+	int status = reproc_start(pr->reproc, (const char **)argv, opts);
+	free(argv), free(envp);
+	if (status < 0) return (*error = reproc_strerror(status), false);
+	pr->running = true, pr->monitor_stdout = monitor_stdout, pr->monitor_stderr = monitor_stderr;
+	lua_checkstack(L, 3), luaL_getsubtable(L, LUA_REGISTRYINDEX, "spawn_procs"),
+		lua_pushvalue(L, index), lua_pushboolean(L, 1), lua_settable(L, -3); // t[proc] = true
+	return true;
 }
 
-size_t process_size() { return sizeof(struct Process); }
+size_t process_size(void) { return sizeof(struct Process); }
 
-bool is_process_running(Process *proc) { return PROCESS(proc)->pid; }
+// Note: do not use `reproc_wait(proc, 0) == REPROC_ETIMEDOUT` because `proc:read()` calls this
+// first, and the process may exit before there's a chance to read its output.
+bool is_process_running(Process *proc) { return PROCESS(proc)->running; }
 
 void wait_process(Process *proc) {
-#if !_WIN32
-	int status;
-	waitpid(PROCESS(proc)->pid, &status, 0), status = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-	process_finished(proc, status);
-#endif
+	process_finished(proc, reproc_wait(PROCESS(proc)->reproc, REPROC_INFINITE));
 }
 
 char *read_process_output(Process *proc, char option, size_t *len, const char **error, int *code) {
-#if !_WIN32
 	char *buf;
 	if (option == 'n') {
-		*len = read(PROCESS(proc)->fstdout, buf = malloc(*len), *len);
-		return (!*len ? (*error = NULL, NULL) : buf);
+		int n =
+			reproc_read(PROCESS(proc)->reproc, REPROC_STREAM_OUT, (uint8_t *)(buf = malloc(*len)), *len);
+		return (n > 0 ? (*len = n, buf) : (*error = reproc_strerror(n), NULL));
 	}
 	int n;
 	char ch;
 	luaL_Buffer lbuf;
 	luaL_buffinit(lua, &lbuf);
 	*len = 0;
-	while ((n = read(PROCESS(proc)->fstdout, &ch, 1)) > 0) {
+	while ((n = reproc_read(PROCESS(proc)->reproc, REPROC_STREAM_OUT, (uint8_t *)&ch, 1)) > 0) {
 		if ((ch != '\r' && ch != '\n') || option == 'L' || option == 'a')
 			luaL_addchar(&lbuf, ch), (*len)++;
 		if (ch == '\n' && option != 'a') break;
 	}
 	luaL_pushresult(&lbuf);
-	if (n < 0 && !*len) return (lua_pop(lua, 1), *error = strerror(errno), *code = errno, NULL);
+	if (n == REPROC_EPIPE) n = 0; // EOF
+	if (n < 0 && !*len) return (lua_pop(lua, 1), *error = reproc_strerror(n), *code = n, NULL);
 	if (n == 0 && !*len && option != 'a') return (lua_pop(lua, 1), *error = NULL, NULL); // EOF
 	buf = strcpy(malloc(*len + 1), lua_tostring(lua, -1));
 	return (lua_pop(lua, 1), *error = NULL, buf); // pop buf
-#else
-	return NULL;
-#endif
 }
 
 void write_process_input(Process *proc, const char *s, size_t len) {
-#if !_WIN32
-	write(PROCESS(proc)->fstdin, s, len);
-#endif
+	reproc_write(PROCESS(proc)->reproc, (const uint8_t *)s, len);
 }
 
-void close_process_input(Process *proc) {
-#if !_WIN32
-	close(PROCESS(proc)->fstdin);
-#endif
-}
+void close_process_input(Process *proc) { reproc_close(PROCESS(proc)->reproc, REPROC_STREAM_IN); }
 
 void kill_process(Process *proc, int signal) {
+	if (!signal) reproc_kill(PROCESS(proc)->reproc);
 #if !_WIN32
-	kill(PROCESS(proc)->pid, signal ? signal : SIGKILL);
+	else
+		kill(reproc_pid(PROCESS(proc)->reproc), signal);
 #endif
 }
 
-int get_process_exit_status(Process *proc) { return PROCESS(proc)->exit_status; }
+int get_process_exit_status(Process *proc) { return reproc_wait(PROCESS(proc)->reproc, 0); }
 
-void cleanup_process(Process *proc) {}
+void cleanup_process(Process *proc) { reproc_destroy(PROCESS(proc)->reproc); }
 
-void suspend() {
+void suspend(void) {
 #if !_WIN32
 	emit("suspend", -1), endwin(), termkey_stop(ta_tk), kill(0, SIGSTOP);
 #endif
 }
 
-void quit() { quitting = !emit("quit", -1); }
+void quit(void) { quitting = true; }
 
 #if !_WIN32
 // Signal for a terminal continue or resize.
@@ -934,48 +896,38 @@ static void signalled(int signal) {
 // Replacement for `termkey_waitkey()` that handles asynchronous I/O.
 static TermKeyResult textadept_waitkey(TermKey *tk, TermKeyKey *key) {
 	refresh_all();
-#if !_WIN32
 	bool force = false;
-	struct timeval timeout = {0, termkey_get_waittime(tk)};
 	while (true) {
+#if !_WIN32
+		struct pollfd fd = {.fd = 0, .events = POLLIN};
+		if (poll(&fd, 1, 50) > 0) termkey_advisereadable(tk); // 50 ms
 		TermKeyResult res = !force ? termkey_getkey(tk, key) : termkey_getkey_force(tk, key);
 		if (res != TERMKEY_RES_AGAIN && res != TERMKEY_RES_NONE) return res;
-		if (res == TERMKEY_RES_AGAIN) force = true;
-		// Wait for input.
-		int nfds;
-		fd_set *fds = new_fds(&nfds);
-		FD_SET(0, fds); // monitor stdin (note: this is a do/while macro on OSX)
-		nfds = fmax(nfds, 1);
-		if (select(nfds, fds, NULL, NULL, force ? &timeout : NULL) > 0) {
-			if (FD_ISSET(0, fds)) termkey_advisereadable(tk);
-			if (read_fds(fds) > 0) refresh_all();
-		}
-		free(fds);
-	}
+		force = res == TERMKEY_RES_AGAIN;
 #else
-	// TODO: ideally computation of view would not be done twice.
-	SciObject *view = !command_entry_active ? focused_view : command_entry;
-	termkey_set_fd(ta_tk, scintilla_get_window(view));
-	mouse_set(ALL_MOUSE_EVENTS); // _popen() and system() change console mode
-	return termkey_getkey(tk, key);
+		WINDOW *win = scintilla_get_window(!command_entry_active ? focused_view : command_entry);
+		termkey_set_fd(ta_tk, win);
+		mouse_set(ALL_MOUSE_EVENTS); // _popen() and system() change console mode
+		TermKeyResult res;
+		wtimeout(win, 1), res = termkey_getkey(tk, key), wtimeout(win, -1); // 50 ms
+		if (res != TERMKEY_RES_NONE) return res;
 #endif
+		update_ui(); // monitor spawned processes and timeouts
+		if (quitting) return TERMKEY_RES_EOF;
+	}
 }
 
 // Runs Textadept.
 int main(int argc, char **argv) {
 	int termkey_flags = 0; // TERMKEY_FLAG_CTRLC does not work; SIGINT is patched out
 	for (int i = 0; i < argc; i++)
-		if (strcmp("-p", argv[i]) == 0 || strcmp("--preserve", argv[i]) == 0) {
+		if (strcmp("-p", argv[i]) == 0 || strcmp("--preserve", argv[i]) == 0)
 			termkey_flags |= TERMKEY_FLAG_FLOWCONTROL;
-			break;
-		} else if ((strcmp("-L", argv[i]) == 0 || strcmp("--lua", argv[i]) == 0) && i + 1 < argc)
+		else if ((strcmp("-L", argv[i]) == 0 || strcmp("--lua", argv[i]) == 0) && i + 1 < argc)
 			return (init_textadept(argc, argv), exit_status); // avoid curses init
 	ta_tk = termkey_new(0, termkey_flags);
 	setlocale(LC_CTYPE, ""); // for displaying UTF-8 characters properly
 	initscr(); // raw()/cbreak() and noecho() are taken care of in libtermkey
-#if NCURSES_REENTRANT
-	ESCDELAY = getenv("ESCDELAY") ? atoi(getenv("ESCDELAY")) : 100;
-#endif
 	find_next = &button_labels[0], replace = &button_labels[1], find_prev = &button_labels[2],
 	replace_all = &button_labels[3], match_case = &find_options[0], whole_word = &find_options[1],
 	regex = &find_options[2], in_files = &find_options[3]; // typedefed, so cannot static initialize
@@ -985,20 +937,17 @@ int main(int argc, char **argv) {
 #if !_WIN32
 	freopen("/dev/null", "w", stderr); // redirect stderr
 	// Set terminal resume and resize handlers.
-	struct sigaction act;
-	memset(&act, 0, sizeof(struct sigaction));
-	act.sa_handler = signalled, sigfillset(&act.sa_mask);
-	sigaction(SIGCONT, &act, NULL), sigaction(SIGWINCH, &act, NULL);
+	struct sigaction act = {.sa_handler = signalled};
+	sigfillset(&act.sa_mask), sigaction(SIGCONT, &act, NULL), sigaction(SIGWINCH, &act, NULL);
 #else
 	freopen("NUL", "w", stdout), freopen("NUL", "w", stderr); // redirect
 #endif
 
-	SciObject *view = focused_view;
 	int ch = 0, event = 0, button = 0, y = 0, x = 0;
 	TermKeyResult res;
 	TermKeyKey key;
 	// clang-format off
-  int keysyms[] = {0,SCK_BACK,SCK_TAB,SCK_RETURN,SCK_ESCAPE,0,SCK_BACK,SCK_UP,SCK_DOWN,SCK_LEFT,SCK_RIGHT,0,0,SCK_INSERT,SCK_DELETE,0,SCK_PRIOR,SCK_NEXT,SCK_HOME,SCK_END};
+	int keysyms[] = {0,SCK_BACK,SCK_TAB,SCK_RETURN,SCK_ESCAPE,0,SCK_BACK,SCK_UP,SCK_DOWN,SCK_LEFT,SCK_RIGHT,0,0,SCK_INSERT,SCK_DELETE,0,SCK_PRIOR,SCK_NEXT,SCK_HOME,SCK_END};
 	// clang-format on
 	while ((ch = 0, res = textadept_waitkey(ta_tk, &key)) != TERMKEY_RES_EOF) {
 		if (res == TERMKEY_RES_ERROR) continue;
@@ -1024,6 +973,7 @@ int main(int argc, char **argv) {
 		bool shift = key.modifiers & TERMKEY_KEYMOD_SHIFT, ctrl = key.modifiers & TERMKEY_KEYMOD_CTRL,
 				 alt = key.modifiers & TERMKEY_KEYMOD_ALT;
 		int modifiers = (shift ? SCMOD_SHIFT : 0) | (ctrl ? SCMOD_CTRL : 0) | (alt ? SCMOD_ALT : 0);
+		SciObject *view = !command_entry_active ? focused_view : command_entry;
 		if (ch && !emit("key", LUA_TNUMBER, ch, LUA_TNUMBER, modifiers, -1))
 			scintilla_send_key(view, ch, modifiers);
 		else if (!ch && !scintilla_send_mouse(view, event, button, modifiers, y, x) &&
@@ -1031,8 +981,6 @@ int main(int argc, char **argv) {
 				y, LUA_TNUMBER, x, -1))
 			// Try again with possibly another view.
 			scintilla_send_mouse(focused_view, event, button, modifiers, y, x);
-		if (quitting) break;
-		view = !command_entry_active ? focused_view : command_entry;
 	}
 	close_textadept(), endwin(), termkey_destroy(ta_tk);
 
@@ -1044,5 +992,5 @@ int main(int argc, char **argv) {
 		if (repl_history[i]) free(repl_history[i]);
 		if (i < 4) free(button_labels[i]), free(option_labels[i] - (find_options[i] ? 0 : 4));
 	}
-	return 0;
+	return exit_status;
 }

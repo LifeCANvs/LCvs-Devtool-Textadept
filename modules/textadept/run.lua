@@ -19,13 +19,13 @@ M.run_in_background = false
 M.run_without_prompt = false
 
 --- The run or compile warning marker number.
-M.MARK_WARNING = _SCINTILLA.new_marker_number()
+M.MARK_WARNING = view.new_marker_number()
 --- The run or compile error marker number.
-M.MARK_ERROR = _SCINTILLA.new_marker_number()
+M.MARK_ERROR = view.new_marker_number()
 --- The run or compile warning indicator number.
-M.INDIC_WARNING = _SCINTILLA.new_indic_number()
+M.INDIC_WARNING = view.new_indic_number()
 --- The run or compile error indicator number.
-M.INDIC_ERROR = _SCINTILLA.new_indic_number()
+M.INDIC_ERROR = view.new_indic_number()
 
 -- Events.
 local run_events = {'compile_output', 'run_output', 'build_output', 'test_output'}
@@ -133,7 +133,7 @@ local function run_command(label, command, dir, event, commands, key, macros)
 	local id = event .. key
 	if not command_entry_f[id] then
 		command_entry_f[id] = function(command, dir, env, event, commands, key, macros)
-			if command:find('^%s*$') then return end
+			if not command or command:find('^%s*$') then return end
 			if not is_func then commands[key] = command end -- update if not originally a function
 			if macros then command = command:gsub('%%%a', macros) end
 			preferred_view = view
@@ -142,7 +142,7 @@ local function run_command(label, command, dir, event, commands, key, macros)
 			events.emit(event, string.format('> %s\n', command:iconv('UTF-8', _CHARSET)))
 			local args = {
 				command, dir, emit, emit, function(status)
-					events.emit(event, string.format('> exit status: %d\n', status))
+					events.emit(event, string.format('> exit status: %d\n\n', status))
 					ui.statusbar_text = status == 0 and _L['Command succeeded'] or _L['Command failed']
 				end
 			}
@@ -203,9 +203,8 @@ M.compile_commands = {actionscript='mxmlc "%f"',ada='gnatmake "%f"',ansi_c='gcc 
 -- Emits `events.COMPILE_OUTPUT`.
 -- @param[opt=buffer.filename] filename Optional path to the file to compile.
 function M.compile(filename)
-	if assert_type(filename, 'string/nil', 1) or buffer.filename then
-		compile_or_run(filename or buffer.filename, M.compile_commands)
-	end
+	if not assert_type(filename, 'string/nil', 1) and not buffer.filename then return end
+	compile_or_run(filename or buffer.filename, M.compile_commands)
 end
 
 --- Map of filenames, file extensions, and lexer names to their associated "run" shell command
@@ -232,9 +231,8 @@ M.run_commands = {actionscript=WIN32 and 'start "" "%e.swf"' or OSX and 'open "f
 -- Emits `events.RUN_OUTPUT`.
 -- @param[opt=buffer.filename] filename Optional path to the file to run.
 function M.run(filename)
-	if assert_type(filename, 'string/nil', 1) or buffer.filename then
-		compile_or_run(filename or buffer.filename, M.run_commands)
-	end
+	if not assert_type(filename, 'string/nil', 1) and not buffer.filename then return end
+	compile_or_run(filename or buffer.filename, M.run_commands)
 end
 
 --- Map of project root paths and "makefiles" to their associated "build" shell command line
@@ -430,13 +428,16 @@ function M.goto_error(location)
 	if buffer.line_state[line_num] > 1 then return end -- non-error
 	buffer.annotation_style[line] = buffer:style_of_name(lexer.ERROR)
 end
+
+-- Jump to the error or warning when pressing Enter.
 events.connect(events.KEYPRESS, function(key)
 	local line_num = buffer:line_from_position(buffer.current_pos)
-	if key == '\n' and is_out_buf(buffer) and buffer.line_state[line_num] > 0 then
-		M.goto_error(line_num)
-		return true
-	end
+	if key ~= '\n' or not is_out_buf(buffer) or buffer.line_state[line_num] == 0 then return end
+	M.goto_error(line_num)
+	return true
 end)
+
+-- Jump to the error or warning when double-clicking a line.
 events.connect(events.DOUBLE_CLICK,
 	function(_, line) if is_out_buf(buffer) then M.goto_error(line) end end)
 

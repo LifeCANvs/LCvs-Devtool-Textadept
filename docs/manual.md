@@ -1,4 +1,4 @@
-## Textadept 12.4 Manual
+## Textadept 12.5 beta 2 Manual
 
 **Contents**
 
@@ -115,6 +115,7 @@ Here is a simple *~/.textadept/init.lua* for illustration:
 	end
 
 	-- Always use spaces for indentation.
+	io.detect_indentation = false
 	buffer.use_tabs = false
 	buffer.tab_width = 2
 
@@ -341,15 +342,13 @@ directory and renaming it *locale.conf*. If you would like to translate Textadep
 language, please translate the English messages in *core/locale.conf* and send me (see README.md)
 the modified file for inclusion in a future release.
 
-**macOS Tip:** by default, macOS does not allow GUI applications like *Textadept.app* to see
-shell environment variables like `$PATH`. (The terminal version is unaffected.) Consequently,
-any features that utilize programs contained in `$PATH` (e.g. the programs in */usr/bin/*
-or */usr/local/bin/*) will not find those programs. In order to work around this, Textadept
-automatically invokes a user-created *~/.textadept/osx_env.sh* file when the application
-starts. This script should export all of the environment variables you need Textadept to
-see. For example:
-
-	export PATH=$PATH
+**macOS Tip:** by default, macOS only allows GUI applications like *Textadept.app*
+to run in a limited environment, with a stripped-down `$PATH`. (The terminal version is
+unaffected.) Consequently, any features that utilize programs contained outside this environment
+will not find those programs (e.g. compile/run using programs installed with Homebrew). Textadept
+attempts to work around this by silently invoking your `$SHELL` and extracting its environment
+(including its full `$PATH`). However, if this fails, you will need to supply absolute paths
+to executables.
 
 **Linux Note:** providing a single binary that runs on all Linux systems proves challenging,
 since the versions of software installed vary widely from distribution to distribution. If
@@ -404,15 +403,16 @@ mentioned previously, even in the terminal version. For example, in your *~/.tex
 
 #### Tab Bar
 
-The GUI version of Textadept has a tab bar that displays all of Textadept's open buffers
-by name, though it is only visible when two or more buffers are open. A '\*' character, if
-present, indicates there are unsaved changes in the marked buffer. There is only one tab bar
-for the entire application, even if there are multiple split views. When two or more views
-are open, the state of the tab bar applies only to the active view, and using the tab bar to
-switch between files also applies only to that view. Right-clicking on the tab bar brings up
-a configurable context menu that is defined by [`textadept.menu.tab_context_menu`][]. Tabs can
-be rearranged by clicking, dragging, and dropping them. You can turn off the tab bar by setting
-[`ui.tabs`][]. For example, in your *~/.textadept/init.lua*:
+The GUI version of Textadept has a tab bar that displays all of Textadept's open buffers by name,
+though it is only visible when two or more buffers are open. A '\*' character, if present,
+indicates there are unsaved changes in the marked buffer. There is only one tab bar for the
+entire application, even if there are multiple split views. When two or more views are open, the
+state of the tab bar applies only to the active view, and using the tab bar to switch between
+files also applies only to that view. Right-clicking on the tab bar brings up a configurable
+context menu that is defined by [`textadept.menu.tab_context_menu`][]. Tabs can be rearranged
+by clicking, dragging, and dropping them. You can toggle the visibility of the tab bar (as long
+as more than one buffer is open) using the "Buffer > Toggle Tab Bar" menu item. You can turn
+it off by default by setting [`ui.tabs`][]. For example, in your *~/.textadept/init.lua*:
 
 	ui.tabs = false
 
@@ -778,16 +778,24 @@ terminal requires pressing `Enter`.)
 
 ##### Encoding
 
-Textadept has the ability to work with files encoded in one of many different encodings, but by
-default it only attempts to read UTF-8, ASCII, CP1252, and UTF-16 files, in that order. If you work
-with files that have other encodings, you will need to add them to [`io.encodings`][], Textadept's
-known encoding list, before attempting to open one. For example, in your *~/.textadept/init.lua*:
+Textadept has the ability to work with files encoded in one of many different encodings,
+but by default it only attempts to read UTF-8, ASCII, CP1252, and UTF-16 files, in that
+order. If you often work with files that have other encodings, you ought to add them to
+[`io.encodings`][], Textadept's known encoding list, before attempting to open one. For example,
+in your *~/.textadept/init.lua*:
 
 	io.encodings[#io.encodings + 1] = 'UTF-32'
 	table.insert(io.encodings, 3, 'Macintosh') -- before CP1252
 
-You can convert a buffer's encoding using the "Buffer > Encoding" menu or
-[`buffer:set_encoding()`][]. You can extend the menu to include more encodings. For example,
+If you open a file whose encoding was detected incorrectly, but you do not wish to alter
+`io.encodings`, you can try picking one of the encodings in the "Buffer > Encoding" menu, or you
+can use the [Lua Command Entry](#lua-command-entry) in conjunction with [`buffer:set_encoding()`][]
+to specify a different encoding. For example, if Textadept incorrectly detected a CP936 file
+as CP1252, running `set_encoding('CP936')` switches to CP936.
+
+Both the "Buffer > Encoding" menu and `buffer:set_encoding()` allow you to change a buffer's
+encoding in place. If the buffer's contents on disk would change, the buffer will be marked
+as having unsaved changes. You can extend the menu to include more encodings. For example,
 in your *~/.textadept/init.lua*:
 
 	local menu = textadept.menu.menubar['Buffer/Encoding']
@@ -806,9 +814,16 @@ Textadept attempts to auto-detect a file's line end mode (EOL mode), falling bac
 ("\r\n") by default on Windows, and LF ('\n') on all other platforms. You can manually change
 the line ending mode using the "Buffer > EOL Mode" menu.
 
-Textadept does not attempt to auto-detect a file's indentation. The default indentation setting
-is a tab representing 8 spaces, but you can specify your preferred indentation settings globally,
-and on a language-specific basis. For example, in your *~/.textadept/init.lua*:
+Textadept attempts to auto-detect a file's indentation settings, but it is a very rudimentary
+check: if any non-blank line starts with a tab, then tabs are used; otherwise, for the
+first non-blank line that starts with between two and eight spaces, that number of spaces
+is used. (Files with mixed indentation are more prone to having their indentation settings
+incorrectly detected.) If Textadept cannot detect a file's indentation, the default setting
+is a tab representing 8 spaces. However, you can specify your preferred indentation settings
+globally, and on a language-specific basis. For example, in your *~/.textadept/init.lua*:
+
+	-- Disallow auto-detection of indentation.
+	io.detect_indentation = false
 
 	-- Default indentation settings for all buffers.
 	buffer.use_tabs = false
@@ -841,6 +856,10 @@ macOS, and `M-\` in the terminal version. You can toggle whitespace visibility f
 buffer via the "View > Toggle View Whitespace" menu item. Visible spaces are represented by
 dots, and visible tabs are represented by arrows. (The terminal version does not have default
 key bindings for either of these actions.)
+
+On the left side of each editor view are margins that show line numbers, [bookmarks](#bookmarks),
+and [fold markers](#code-folding). You can toggle the visibility of these margins using the
+"View > Toggle Margins" menu item.
 
 The GUI version of Textadept can show small guiding lines based on indentation level, and does so
 by default. You can toggle the visibility of these guides for the current view via the "View >
@@ -971,7 +990,8 @@ You can create contiguous selections as follows:
   additional (multiple) selections. Undo the most recent multiple selection via `Ctrl+Alt+D`,
   `^⌘D`, or `M-D`.
 - Select the current line via `Ctrl+L` on Windows and Linux, `⌘L` on macOS, and `^L` in the
-  terminal version.
+  terminal version. If text is already selected and spans multiple lines, this action expands
+  the selection to include whole lines.
 - Double click to select a word, and triple-click to select a line.
 - Click and optionally drag within the line number margin to select whole lines.
 - Select the current paragraph via `Ctrl+Shift+P` on Windows and Linux, `⌘⇧P` on macOS,
@@ -1513,6 +1533,12 @@ CMake boolean variables that affect the build:
 - `GTK2`: Unless off, builds the Gtk 2 version of Textadept. The default is auto-detected.
 - `CURSES`: Unless off, builds the Curses (terminal) version of Textadept. The default is
   auto-detected.
+- `GENERATE_HTML`: When on, creates a `html` target to build HTML documentation in the *docs/*
+  directory (e.g. `cmake --build build_dir --target html`). Requires [Lua][] and [Discount][]
+  to be installed. Defaults to off.
+
+[Lua]: https://www.lua.org
+[Discount]: https://www.pell.portland.or.us/~orc/Code/discount/
 
 ---
 ### Appendix
@@ -1623,7 +1649,6 @@ Textadept is composed of the following technologies:
 - [cdk][]: terminal UI widget toolkit
 - [libtermkey][]: terminal keyboard entry handling library
 - [Scintilla][]: core text editing component
-- [Lexilla][]: core syntax highlighting library for Scintilla
 - [Scinterm][]: curses (terminal) platform for Scintilla
 - [Scintillua][]: syntax highlighting for Scintilla using Lua lexers
 - [Lua][]: core scripting language
@@ -1632,11 +1657,11 @@ Textadept is composed of the following technologies:
 - [Lua-std-regex][]: Lua library for regular expressions
 - [iconv][]: library for converting text to and from Unicode
 - [SingleApplication][]: single-instance application support for Qt
+- [reproc][]: process spawning library for the terminal version
 
 [Qt]: https://www.qt.io
 [GTK]: https://www.gtk.org
 [Scintilla]: https://scintilla.org
-[Lexilla]: https://scintilla.org/Lexilla.html
 [Scinterm]: https://orbitalquark.github.io/scinterm
 [Scintillua]: https://orbitalquark.github.io/scintillua
 [Lua]: https://www.lua.org
@@ -1649,6 +1674,7 @@ Textadept is composed of the following technologies:
 [libtermkey]: http://www.leonerd.org.uk/code/libtermkey
 [iconv]: https://www.gnu.org/software/libiconv
 [SingleApplication]: https://github.com/itay-grudev/SingleApplication
+[reproc]: https://github.com/DaanDeMeyer/reproc
 
 #### Migrating from Textadept 11 to 12
 
@@ -1854,9 +1880,9 @@ list selections are always returned as numeric indices.
 
 ##### Filter Changes
 
-Filters for `lfs.walk()`, `io.quick_open()`, and `ui.find.find_in_files()` no longer use Lua
-patterns, but use typical shell glob patterns instead. This means special characters like '-'
-and '+' can be used literally and longer need to be escaped with '%'.
+Filters for `lfs.walk()` and `io.quick_open()` no longer use Lua patterns, but use typical shell
+glob patterns instead. This means special characters like '-' and '+' can be used literally
+and longer need to be escaped with '%'.
 
 ##### Language Module Changes
 

@@ -271,10 +271,15 @@
 -- @function get_text
 
 --- Returns the selected text.
--- Multiple selections are included in order with no delimiters. Rectangular selections are
--- included from top to bottom with end of line characters. Virtual space is not included.
+-- Multiple selections are included in order, and delimited by `buffer.copy_separator`. Rectangular
+-- selections are included from top to bottom with end of line characters. Virtual space is
+-- not included.
 -- @return string, number
 -- @function get_sel_text
+
+--- The delimiters used between multiple selections in `buffer:get_sel_text()`.
+-- The default value is `''`.
+-- @field copy_separator
 
 --- Returns the range of text between positions *start_pos* and *end_pos*.
 -- @param start_pos The start position of the range of text to get in *buffer*.
@@ -405,8 +410,14 @@
 --- Indents the text on the selected lines or types a Tab character ("\t") at the caret position.
 -- @function tab
 
+--- Indents the text on the current or selected lines.
+-- @function line_indent
+
 --- Un-indents the text on the selected lines.
 -- @function back_tab
+
+--- Un-indents the text on the current or selected lines.
+-- @function line_dedent
 
 --- Swaps the current line with the previous one.
 -- @function line_transpose
@@ -1271,11 +1282,15 @@
 -- moves to the previous line.
 -- @section
 
+--- Returns a unique marker number for use with `view:marker_define()`.
+-- Use this function for custom markers in order to prevent clashes with identifiers of other
+-- custom markers.
+-- @function view.new_marker_number
+
 --- Assigns marker symbol *symbol* to marker number *marker*, in the range of `1` to `32`.
 -- *symbol* is shown in marker symbol margins next to lines marked with *marker*.
 -- @param marker The marker number in the range of `1` to `32` to set *symbol* for.
 -- @param symbol The marker symbol: `view.MARK_*`.
--- @see _SCINTILLA.new_marker_number
 -- @function view:marker_define
 
 --- @field view.MARK_ARROW
@@ -1637,6 +1652,11 @@
 -- with text.
 -- @section
 
+--- Returns a unique indicator number for use with custom indicators.
+-- Use this function for custom indicators in order to prevent clashes with identifiers of
+-- other custom indicators.
+-- @function view.new_indic_number
+
 --- List of styles for indicator numbers from `1` to `32`.
 --
 -- - `view.INDIC_PLAIN`
@@ -1694,7 +1714,7 @@
 -- - `view.INDIC_POINT_TOP`
 --	A triangle above the start of the indicator range.
 --
--- Use `_SCINTILLA.new_indic_number()` for custom indicators.
+-- Use `view.new_indic_number()` for custom indicators.
 -- Changing an indicator's style resets that indicator's hover style.
 -- @table view.indic_style
 
@@ -1898,6 +1918,11 @@
 -- @see textadept.editing.autocomplete
 -- @function auto_c_show
 
+--- Returns a unique user list identier number for use with `buffer:user_list_show()`.
+-- Use this function for custom user lists in order to prevent clashes with list identifiers
+-- of other custom user lists.
+-- @function view.new_user_list_type
+
 --- Displays a user list identified by list identifier number *id* and constructed from string
 -- *items* (whose items are delimited by `buffer.auto_c_separator` characters).
 -- The sorted order of *items* (`buffer.auto_c_order`) must have already been defined. When
@@ -1906,7 +1931,6 @@
 -- @param id The list identifier number greater than zero to use.
 -- @param items The sorted string of words to show, separated by `buffer.auto_c_separator`
 --	characters (initially spaces).
--- @see _SCINTILLA.new_user_list_type
 -- @function user_list_show
 
 --- Selects the first item that starts with string *prefix* in an autocompletion or user list,
@@ -2016,10 +2040,15 @@
 -- which uniquely identifies a registered image.
 -- @section
 
+--- Returns a unique image type identifier number for use with `view:register_image()` and
+-- `view:register_rgba_image()`.
+-- Use this function for custom image types in order to prevent clashes with identifiers of
+-- other custom image types.
+-- @function view.new_image_type
+
 --- Registers XPM image *xpm_data* to type number *type* for use in autocompletion and user lists.
 -- @param type Integer type to register the image with.
 -- @param xpm_data The XPM data as described in `view:marker_define_pixmap()`.
--- @see _SCINTILLA.new_image_type
 -- @see textadept.editing.XPM_IMAGES
 -- @function view:register_image
 
@@ -2881,7 +2910,7 @@
 -- @section
 
 --- Display the horizontal scroll bar.
--- The default value is `true`.
+-- The default value is `true` in the GUI version and `false` in the terminal version.
 -- @field view.h_scroll_bar
 
 --- Display the vertical scroll bar.
@@ -2889,15 +2918,16 @@
 -- @field view.v_scroll_bar
 
 --- The horizontal scrolling pixel width.
--- For performance, the view does not measure the display width of the buffer to determine
--- the properties of the horizontal scroll bar, but uses an assumed width instead. To ensure
--- the width of the currently visible lines can be scrolled use `view.scroll_width_tracking`.
--- The default value is `2000`.
+-- If `view.scroll_width_tracking` is `false`, the view uses this static width for horizontal
+-- scrolling instead of measuring the width of buffer lines.
+-- The default value is `1` in conjunction with `view.scroll_width_tracking` being `true`. A
+-- value of `2000` is reasonable if `view.scroll_width_tracking` is `false`.
 -- @field view.scroll_width
 
---- Continuously update the horizontal scrolling width to match the maximum width of a displayed
--- line beyond `view.scroll_width`.
--- The default value is `false`.
+--- Grow (but never shrink) `view.scroll_width` as needed to match the maximum width of a
+-- displayed line.
+-- Enabling this may have performance implications for buffers with long lines.
+-- The default value is `true`.
 -- @field view.scroll_width_tracking
 
 --- Disable scrolling past the last line.
@@ -3111,7 +3141,7 @@
 --- Configure Text Zoom.
 -- @section
 
---- Increases the size of all fonts by one point, up to 20.
+--- Increases the size of all fonts by one point, up to 60.
 -- @function view:zoom_in
 
 --- Decreases the size of all fonts by one point, down to -10.
@@ -3488,6 +3518,7 @@
 -- - annotation_style_offset
 -- - annotation_styles
 -- - automatic_fold
+-- - auto_c_style
 -- - buffered_draw
 -- - call_tip_back
 -- - call_tip_fore
@@ -3544,6 +3575,7 @@
 -- - style_hotspot
 -- - style_index_at
 -- - style_size_fractional
+-- - style_stretch
 -- - style_weight
 -- - sub_style_bases
 -- - sub_styles_length
@@ -3560,6 +3592,7 @@
 -- - undo_current
 -- - undo_detach
 -- - undo_save_point
+-- - undo_sequence
 -- - undo_tentative
 -- - INDICATOR_CONTAINER
 -- - MOD_NORM
@@ -3620,6 +3653,7 @@
 -- - count_code_units
 -- - create_document
 -- - create_loader
+-- - cut_allow_line
 -- - describe_property
 -- - describe_key_word_sets
 -- - description_of_style

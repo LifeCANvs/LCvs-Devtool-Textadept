@@ -1,8 +1,7 @@
-## Textadept 12.4 API Documentation
+## Textadept 12.5 beta 2 API Documentation
 
 1. [_G](#_G)
 1. [_L](#_L)
-1. [_SCINTILLA](#_SCINTILLA)
 1. [args](#args)
 1. [buffer](#buffer)
 1. [events](#events)
@@ -228,9 +227,17 @@ Parameters:
 - *to*:  Index to move the buffer to.
 
 <a id="quit"></a>
-#### `quit`()
+#### `quit`([*status*[, *events*]])
 
-Emits [`events.QUIT`](#events.QUIT), and unless any handler returns `false`, quits Textadept.
+Attempts to quit Textadept.
+Emits [`events.QUIT`](#events.QUIT) unless *events* is `false`.
+
+Parameters:
+
+- *status*:  Optional status code for Textadept to exit with. The default value is 0.
+- *events*:  Optional flag that indicates whether or not to emit [`events.QUIT`](#events.QUIT),
+ which could prevent quitting. Passing `false` is not recommended and could result in data
+ loss. The default value is `true`.
 
 <a id="reset"></a>
 #### `reset`()
@@ -246,6 +253,8 @@ State. Any scripts that need to differentiate between startup and reset can test
 Calls function *f* with the given arguments after *interval* seconds.
 If *f* returns `true`, calls *f* repeatedly every *interval* seconds as long as *f* returns
 `true`. A `nil` or `false` return value stops repetition.
+Note: in the terminal version, timeout functions will not be called until an active Find &
+Replace pane session finishes, and until an active dialog closes.
 
 Parameters:
 
@@ -263,112 +272,6 @@ Map of all messages used by Textadept to their localized form.
 If the localized version of a given message does not exist, the non-localized message is
 returned. Use `rawget()` to check if a localization exists.
 Note: the terminal version ignores any "_" or "&" mnemonics the GUI version would use.
-
----
-<a id="_SCINTILLA"></a>
-## The `_SCINTILLA` Module
----
-
-Scintilla constants, functions, and properties.
-Do not modify anything in this module. Doing so will have unpredictable consequences.
-
-### Fields defined by `_SCINTILLA`
-
-<a id="_SCINTILLA.constants"></a>
-#### `_SCINTILLA.constants` &lt;table&gt;
-
-Map of Scintilla constant names to their numeric values.
-
-See also:
-
-- [`buffer`](#buffer)
-- [`view`](#view)
-
-<a id="_SCINTILLA.events"></a>
-#### `_SCINTILLA.events` &lt;table&gt;
-
-Map of Scintilla event IDs to tables of event names and event parameters.
-
-<a id="_SCINTILLA.functions"></a>
-#### `_SCINTILLA.functions` &lt;table&gt;
-
-Map of Scintilla function names to tables containing their IDs, return types, wParam types,
-and lParam types. Types are as follows:
-
-- `0`: Void.
-- `1`: Integer.
-- `2`: Length of the given lParam string.
-- `3`: Integer position.
-- `4`: Color, in "0xBBGGRR" format or "0xAABBGGRR" format where supported.
-- `5`: Boolean `true` or `false`.
-- `6`: Bitmask of Scintilla key modifiers and a key value.
-- `7`: String parameter.
-- `8`: String return value.
-
-<a id="_SCINTILLA.properties"></a>
-#### `_SCINTILLA.properties` &lt;table&gt;
-
-Map of Scintilla property names to table values containing their "get" function IDs, "set"
-function IDs, return types, and wParam types.
-The wParam type will be non-zero if the property is indexable.
-Types are the same as in the [`_SCINTILLA.functions`](#_SCINTILLA.functions) table.
-
-
-### Functions defined by `_SCINTILLA`
-
-<a id="_SCINTILLA.new_image_type"></a>
-#### `_SCINTILLA.new_image_type`()
-
-Returns a unique image type identier number for use with [`view:register_image()`](#view.register_image) and
-[`view:register_rgba_image()`](#view.register_rgba_image).
-Use this function for custom image types in order to prevent clashes with identifiers of
-other custom image types.
-
-Usage:
-
-- `local image_type = _SCINTILLA.new_image_type()
-`
-
-<a id="_SCINTILLA.new_indic_number"></a>
-#### `_SCINTILLA.new_indic_number`()
-
-Returns a unique indicator number for use with custom indicators.
-Use this function for custom indicators in order to prevent clashes with identifiers of
-other custom indicators.
-
-Usage:
-
-- `local indic_num = _SCINTILLA.new_indic_number()
-`
-
-See also:
-
-- [`view.indic_style`](#view.indic_style)
-
-<a id="_SCINTILLA.new_marker_number"></a>
-#### `_SCINTILLA.new_marker_number`()
-
-Returns a unique marker number for use with [`view:marker_define()`](#view.marker_define).
-Use this function for custom markers in order to prevent clashes with identifiers of other
-custom markers.
-
-Usage:
-
-- `local marknum = _SCINTILLA.new_marker_number()
-`
-
-<a id="_SCINTILLA.new_user_list_type"></a>
-#### `_SCINTILLA.new_user_list_type`()
-
-Returns a unique user list identier number for use with [`buffer:user_list_show()`](#buffer.user_list_show).
-Use this function for custom user lists in order to prevent clashes with list identifiers
-of other custom user lists.
-
-Usage:
-
-- `local list_type = _SCINTILLA.new_user_list_type()
-`
-
 
 ---
 <a id="args"></a>
@@ -880,12 +783,19 @@ Returns the buffer's text.
 #### `buffer:get_sel_text`()
 
 Returns the selected text.
-Multiple selections are included in order with no delimiters. Rectangular selections are
-included from top to bottom with end of line characters. Virtual space is not included.
+Multiple selections are included in order, and delimited by [`buffer.copy_separator`](#buffer.copy_separator). Rectangular
+selections are included from top to bottom with end of line characters. Virtual space is
+not included.
 
 Return:
 
 - string, number
+
+<a id="buffer.copy_separator"></a>
+#### `buffer.copy_separator` 
+
+The delimiters used between multiple selections in [`buffer:get_sel_text()`](#buffer.get_sel_text).
+The default value is `''`.
 
 <a id="buffer.text_range"></a>
 #### `buffer:text_range`(*start_pos*, *end_pos*)
@@ -1109,10 +1019,20 @@ Deletes the buffer's text.
 
 Indents the text on the selected lines or types a Tab character ("\t") at the caret position.
 
+<a id="buffer.line_indent"></a>
+#### `buffer:line_indent`()
+
+Indents the text on the current or selected lines.
+
 <a id="buffer.back_tab"></a>
 #### `buffer:back_tab`()
 
 Un-indents the text on the selected lines.
+
+<a id="buffer.line_dedent"></a>
+#### `buffer:line_dedent`()
+
+Un-indents the text on the current or selected lines.
 
 <a id="buffer.line_transpose"></a>
 #### `buffer:line_transpose`()
@@ -2390,6 +2310,13 @@ The default value is `1`.
  one another in ascending order. Markers move in sync with the lines they were added to as
  text is inserted and deleted. When a line that has a marker on it is deleted, that marker
  moves to the previous line.
+<a id="view.new_marker_number"></a>
+#### `view.new_marker_number`()
+
+Returns a unique marker number for use with [`view:marker_define()`](#view.marker_define).
+Use this function for custom markers in order to prevent clashes with identifiers of other
+custom markers.
+
 <a id="view.marker_define"></a>
 #### `view:marker_define`(*marker*, *symbol*)
 
@@ -2400,10 +2327,6 @@ Parameters:
 
 - *marker*:  The marker number in the range of `1` to `32` to set *symbol* for.
 - *symbol*:  The marker symbol: `view.MARK_*`.
-
-See also:
-
-- [`_SCINTILLA.new_marker_number`](#_SCINTILLA.new_marker_number)
 
 <a id="view.marker_define_pixmap"></a>
 #### `view:marker_define_pixmap`(*marker*, *pixmap*)
@@ -2774,6 +2697,13 @@ List of the number of annotation text lines per line number. (Read-only)
  Indicators have an assigned indicator style and are displayed along with any existing
  styles text may already have. They can be hovered over and clicked on. Indicators move along
  with text.
+<a id="view.new_indic_number"></a>
+#### `view.new_indic_number`()
+
+Returns a unique indicator number for use with custom indicators.
+Use this function for custom indicators in order to prevent clashes with identifiers of
+other custom indicators.
+
 <a id="view.indic_style"></a>
 #### `view.indic_style` &lt;table&gt;
 
@@ -2834,7 +2764,7 @@ List of styles for indicator numbers from `1` to `32`.
 - [`view.INDIC_POINT_TOP`](#view.INDIC_POINT_TOP)
 	A triangle above the start of the indicator range.
 
-Use [`_SCINTILLA.new_indic_number()`](#_SCINTILLA.new_indic_number) for custom indicators.
+Use [`view.new_indic_number()`](#view.new_indic_number) for custom indicators.
 Changing an indicator's style resets that indicator's hover style.
 
 <a id="view.indic_under"></a>
@@ -3005,6 +2935,13 @@ See also:
 - [`textadept.editing.autocompleters`](#textadept.editing.autocompleters)
 - [`textadept.editing.autocomplete`](#textadept.editing.autocomplete)
 
+<a id="view.new_user_list_type"></a>
+#### `view.new_user_list_type`()
+
+Returns a unique user list identier number for use with [`buffer:user_list_show()`](#buffer.user_list_show).
+Use this function for custom user lists in order to prevent clashes with list identifiers
+of other custom user lists.
+
 <a id="buffer.user_list_show"></a>
 #### `buffer:user_list_show`(*id*, *items*)
 
@@ -3019,10 +2956,6 @@ Parameters:
 - *id*:  The list identifier number greater than zero to use.
 - *items*:  The sorted string of words to show, separated by [`buffer.auto_c_separator`](#buffer.auto_c_separator)
 	characters (initially spaces).
-
-See also:
-
-- [`_SCINTILLA.new_user_list_type`](#_SCINTILLA.new_user_list_type)
 
 <a id="buffer.auto_c_select"></a>
 #### `buffer:auto_c_select`(*prefix*)
@@ -3167,6 +3100,14 @@ The multiple selection autocomplete mode.
  Autocompletion and user lists can render images next to items by appending to each list
  item the type separator character specific to lists followed by an image's type number,
  which uniquely identifies a registered image.
+<a id="view.new_image_type"></a>
+#### `view.new_image_type`()
+
+Returns a unique image type identifier number for use with [`view:register_image()`](#view.register_image) and
+[`view:register_rgba_image()`](#view.register_rgba_image).
+Use this function for custom image types in order to prevent clashes with identifiers of
+other custom image types.
+
 <a id="view.register_image"></a>
 #### `view:register_image`(*type*, *xpm_data*)
 
@@ -3179,7 +3120,6 @@ Parameters:
 
 See also:
 
-- [`_SCINTILLA.new_image_type`](#_SCINTILLA.new_image_type)
 - [`textadept.editing.XPM_IMAGES`](#textadept.editing.XPM_IMAGES)
 
 <a id="view.rgba_image_width"></a>
@@ -4160,7 +4100,7 @@ The default is `0`.
 #### `view.h_scroll_bar` 
 
 Display the horizontal scroll bar.
-The default value is `true`.
+The default value is `true` in the GUI version and `false` in the terminal version.
 
 <a id="view.v_scroll_bar"></a>
 #### `view.v_scroll_bar` 
@@ -4172,17 +4112,18 @@ The default value is `true`.
 #### `view.scroll_width` 
 
 The horizontal scrolling pixel width.
-For performance, the view does not measure the display width of the buffer to determine
-the properties of the horizontal scroll bar, but uses an assumed width instead. To ensure
-the width of the currently visible lines can be scrolled use [`view.scroll_width_tracking`](#view.scroll_width_tracking).
-The default value is `2000`.
+If [`view.scroll_width_tracking`](#view.scroll_width_tracking) is `false`, the view uses this static width for horizontal
+scrolling instead of measuring the width of buffer lines.
+The default value is `1` in conjunction with [`view.scroll_width_tracking`](#view.scroll_width_tracking) being `true`. A
+value of `2000` is reasonable if [`view.scroll_width_tracking`](#view.scroll_width_tracking) is `false`.
 
 <a id="view.scroll_width_tracking"></a>
 #### `view.scroll_width_tracking` 
 
-Continuously update the horizontal scrolling width to match the maximum width of a displayed
-line beyond [`view.scroll_width`](#view.scroll_width).
-The default value is `false`.
+Grow (but never shrink) [`view.scroll_width`](#view.scroll_width) as needed to match the maximum width of a
+displayed line.
+Enabling this may have performance implications for buffers with long lines.
+The default value is `true`.
 
 <a id="view.end_at_last_line"></a>
 #### `view.end_at_last_line` 
@@ -4348,7 +4289,7 @@ The default value is [`view.WRAPINDENT_FIXED`](#view.WRAPINDENT_FIXED).
 <a id="view.zoom_in"></a>
 #### `view:zoom_in`()
 
-Increases the size of all fonts by one point, up to 20.
+Increases the size of all fonts by one point, up to 60.
 
 <a id="view.zoom_out"></a>
 #### `view:zoom_out`()
@@ -5033,6 +4974,7 @@ Arguments:
 #### `events.FIND` 
 
 Emitted to find text via the Find & Replace Pane.
+Emitted by [`ui.find.find_next()`](#ui.find.find_next) and [`ui.find.find_prev()`](#ui.find.find_prev).
 Arguments:
 
 - *text*: The text to search for.
@@ -5178,6 +5120,7 @@ Emitted by [`quit()`](#quit).
 #### `events.REPLACE` 
 
 Emitted to replace selected (found) text.
+Emitted by [`ui.find.replace()`](#ui.find.replace).
 Arguments:
 
 - *text*: The replacement text.
@@ -5186,6 +5129,7 @@ Arguments:
 #### `events.REPLACE_ALL` 
 
 Emitted to replace all occurrences of found text.
+Emitted by [`ui.find.replace_all()`](#ui.find.replace_all).
 Arguments:
 
 - *find_text*: The text to search for.
@@ -5387,7 +5331,7 @@ Parameters:
 
 Usage:
 
-- `events.connect('my_event', function(msg) ui.print(msg) end)
+- `events.connect('my_event', function() ... end)
 `
 
 <a id="events.disconnect"></a>
@@ -5433,6 +5377,14 @@ Return:
 Extends Lua's [`io`](#io) library with Textadept functions for working with files.
 
 ### Fields defined by `io`
+
+<a id="io.detect_indentation"></a>
+#### `io.detect_indentation` 
+
+Whether or not to attempt to detect indentation settings for opened files.
+If any non-blank line starts with a tab, tabs are used. Otherwise, for the first non-blank
+line that starts with between two and eight spaces, that number of spaces is used.
+The default value is `true`.
 
 <a id="io.encodings"></a>
 #### `io.encodings` &lt;table&gt;
@@ -5513,7 +5465,7 @@ Return:
 - string root or nil
 
 <a id="io.open_file"></a>
-#### `io.open_file`([*filenames*[, *encodings*]])
+#### `io.open_file`([*filenames*])
 
 Opens *filenames*, a string filename or list of filenames, or the user-selected filename(s).
 Emits [`events.FILE_OPENED`](#events.FILE_OPENED).
@@ -5522,8 +5474,6 @@ Parameters:
 
 - *filenames*:  Optional string filename or table of filenames to open. If `nil`,
 	the user is prompted with a fileselect dialog.
-- *encodings*:  Optional string encoding or table of encodings file contents are in
-	(one encoding per file). If `nil`, encoding auto-detection is attempted via [`io.encodings`](#io.encodings).
 
 <a id="io.open_recent_file"></a>
 #### `io.open_recent_file`()
@@ -7285,7 +7235,6 @@ Extends Lua's [`os`](#os) library to provide process spawning capabilities.
 Spawns an interactive child process *cmd* in a separate thread, returning a handle to that
 process.
 On Windows, *cmd* is passed to `cmd.exe`: `%COMSPEC% /c [cmd]`.
-At the moment, only the Windows terminal version spawns processes in the same thread.
 
 Parameters:
 
@@ -7301,8 +7250,6 @@ Parameters:
 - *stdout_cb*:  Optional Lua function that accepts a string parameter for a block of
 	standard output read from the child. Stdout is read asynchronously in 1KB or 0.5KB
 	blocks (depending on the platform), or however much data is available at the time.
-	At the moment, only the Windows terminal version sends all output, whether it be stdout
-	or stderr, to this callback after the process finishes.
 - *stderr_cb*:  Optional Lua function that accepts a string parameter for a block
 	of standard error read from the child. Stderr is read asynchronously in 1KB or 0.5kB
 	blocks (depending on the platform), or however much data is available at the time.
@@ -7673,7 +7620,7 @@ Parameters:
 #### `textadept.editing.goto_line`([*line*])
 
 Moves the caret to the beginning of line number *line* or the user-specified line, ensuring
-*line* is visible.
+that line is visible.
 
 Parameters:
 
@@ -7709,6 +7656,7 @@ Parameters:
 #### `textadept.editing.select_line`()
 
 Selects the current line.
+If a current selection spans multiple lines, expands the selection to include whole lines.
 
 <a id="textadept.editing.select_paragraph"></a>
 #### `textadept.editing.select_paragraph`()
@@ -7977,6 +7925,8 @@ Shift+Enter | ⇧↩ | None | Start a new line below the current one
 Ctrl+Shift+Enter | ⌘⇧↩ | None | Start a new line above the current one
 Ctrl+Alt+Down | ^⌘⇣ | M-Down | Scroll line down
 Ctrl+Alt+Up | ^⌘⇡ | M-Up | Scroll line up
+Alt+PgUp | ^⇞ | N/A | Scroll page up
+Alt+PgDn | ^⇟ | N/A | Scroll page down
 Menu<br/> Shift+F10^(§) | N/A | N/A | Show context menu
 Ctrl+Alt+Shift+R *c* | ^⌘⇧R *c* | M-S-R *c* | Save macro to alphanumeric register *c*
 Ctrl+Alt+R *c* | ^⌘R *c* | M-R *c* | Load and play macro from alphanumeric register *c*
@@ -8788,7 +8738,7 @@ This is a low-level field. You probably want to use the higher-level
 #### `ui.tabs` 
 
 Whether or not to display the tab bar when multiple buffers are open.
-The default value is `true`.
+The default value is `true` in the GUI version, and `false` in the terminal version.
 A third option, [`ui.SHOW_ALL_TABS`](#ui.SHOW_ALL_TABS) may be used to always show the tab bar, even if only one
 buffer is open.
 
@@ -8873,13 +8823,13 @@ Usage:
 <a id="ui.output"></a>
 #### `ui.output`(...)
 
-Prints the given value(s) to the output buffer, and returns that buffer.
+Prints the given strings to the output buffer, and returns that buffer.
 Opens a new buffer if one has not already been opened for printing output. The output buffer
 attempts to understand the error messages and warnings produced by various tools.
 
 Parameters:
 
-- *...*:  Output to print.
+- *...*:  Output strings to print.
 
 Return:
 
@@ -8892,12 +8842,12 @@ See also:
 <a id="ui.output_silent"></a>
 #### `ui.output_silent`(...)
 
-Silently prints the given value(s) to the output buffer, and returns that buffer.
+Silently prints the given strings to the output buffer, and returns that buffer.
 Opens a new buffer for printing to if necessary.
 
 Parameters:
 
-- *...*:  Output to print.
+- *...*:  Output strings to print.
 
 Return:
 
@@ -8929,43 +8879,24 @@ See also:
 <a id="ui.print"></a>
 #### `ui.print`(...)
 
-Prints the given value(s) to the message buffer, along with a trailing newline.
-Opens a new buffer if one has not already been opened for printing messages.
+Prints the given value(s) to the output buffer, along with a trailing newline.
+Opens a new buffer if one has not already been opened for printing output.
 
 Parameters:
 
-- *...*:  Message or values to print. Lua's `tostring()` function is called for each value.
+- *...*:  Values to print. Lua's `tostring()` function is called for each value.
 	They will be printed as tab-separated values.
 
-<a id="ui.print_silent"></a>
-#### `ui.print_silent`(...)
-
-Silently prints the given value(s) to the message buffer, and returns that buffer.
-
-Parameters:
-
-- *...*:  Message or values to print.
-
-Return:
-
-- print buffer
-
-See also:
-
-- [`ui.print`](#ui.print)
-
 <a id="ui.print_silent_to"></a>
-#### `ui.print_silent_to`(*type*, ...)
+#### `ui.print_silent_to`(*type*, *message*)
 
-Silently prints the given value(s) to the buffer of string type *type*, and returns that
-buffer.
+Silently prints the given message to the buffer of string type *type*, and returns that buffer.
 Opens a new buffer for printing to if necessary.
 
 Parameters:
 
 - *type*:  String type of print buffer.
-- *...*:  Message or values to print. Lua's `tostring()` function is called for each value.
-	They will be printed as tab-separated values.
+- *message*:  String message to print.
 
 Return:
 
@@ -8976,23 +8907,22 @@ See also:
 - [`ui.print_to`](#ui.print_to)
 
 <a id="ui.print_to"></a>
-#### `ui.print_to`(*type*, ...)
+#### `ui.print_to`(*type*, *message*)
 
-Prints the given value(s) to the buffer of string type *type*, along with a trailing newline,
+Prints the given message to the buffer of string type *type*, along with a trailing newline,
 and returns that buffer.
 Opens a new buffer for printing to if necessary. If the print buffer is already open in a
-view, the value(s) is printed to that view. Otherwise the view is split (unless [`ui.tabs`](#ui.tabs)
+view, the message is printed to that view. Otherwise the view is split (unless [`ui.tabs`](#ui.tabs)
 is `true`) and the print buffer is displayed before being printed to.
 
 Parameters:
 
 - *type*:  String type of print buffer.
-- *...*:  Message or values to print. Lua's `tostring()` function is called for each value.
-	They will be printed as tab-separated values.
+- *message*:  String message to print.
 
 Usage:
 
-- `ui.print_to(_L['[Message Buffer]'], message)
+- `ui.print_to('[Typed Buffer]', message)
 `
 
 Return:
@@ -9028,7 +8958,7 @@ Buffers in the same project as the current buffer are shown with relative paths.
 #### `ui.update`()
 
 Processes pending UI events, including reading from spawned processes.
-This function is primarily used in unit tests.
+This function is primarily used in Textadept's own unit tests.
 
 
 ---
@@ -9072,7 +9002,8 @@ The height in pixels of the command entry.
 <a id="ui.command_entry.focus"></a>
 #### `ui.command_entry.focus`()
 
-Opens the command entry.
+Opens the command entry. This is a low-level function. You probably want to use the higher-level
+[`ui.command_entry.run()`](#ui.command_entry.run).
 
 <a id="ui.command_entry.run"></a>
 #### `ui.command_entry.run`(*label*, *f*[, *keys*][, *lang*='*text*'[, *initial_text*[, ...]]])
@@ -9317,7 +9248,7 @@ The text in the "Find" entry.
 <a id="ui.find.find_in_files_filters"></a>
 #### `ui.find.find_in_files_filters` &lt;table&gt;
 
-Map of directory paths to filters used in [`ui.find.find_in_files()`](#ui.find.find_in_files).
+Map of directory paths to filters used when finding in files.
 This table is updated when the user manually specifies a filter in the "Filter" entry during
 an "In files" search.
 
@@ -9434,39 +9365,17 @@ This is primarily used for localization.
 
 ### Functions defined by `ui.find`
 
-<a id="ui.find.find_in_files"></a>
-#### `ui.find.find_in_files`([*dir*[, *filter*]])
-
-Searches directory *dir* or the user-specified directory for files that match search text
-and search options (subject to optional filter *filter*), and prints the results to a buffer
-titled "Files Found", highlighting found text.
-Use the [`ui.find.find_entry_text`](#ui.find.find_entry_text), [`ui.find.match_case`](#ui.find.match_case), [`ui.find.whole_word`](#ui.find.whole_word), and
-[`ui.find.regex`](#ui.find.regex) fields to set the search text and option flags, respectively.
-A filter determines which files to search in, with the default filter being
-`ui.find.find_in_files_filters[dir]` (if it exists) or [`lfs.default_filter`](#lfs.default_filter). A filter consists
-of glob patterns that match file and directory paths to include or exclude. Patterns are
-inclusive by default. Exclusive patterns begin with a '!'. If no inclusive patterns are
-given, any filename is initially considered. As a convenience, '/' also matches the Windows
-directory separator ('[/\\]' is not needed). If *filter* is `nil`, the filter from the
-[`ui.find.find_in_files_filters`](#ui.find.find_in_files_filters) table for *dir* is used. If that filter does not exist,
-[`lfs.default_filter`](#lfs.default_filter) is used.
-
-Parameters:
-
-- *dir*:  Optional directory path to search. If `nil`, the user is prompted for one.
-- *filter*:  Optional filter for files and directories to exclude. The
-	default value is [`lfs.default_filter`](#lfs.default_filter) unless a filter for *dir* is defined in
-	[`ui.find.find_in_files_filters`](#ui.find.find_in_files_filters).
-
 <a id="ui.find.find_next"></a>
 #### `ui.find.find_next`()
 
 Mimics pressing the "Find Next" button.
+Emits [`events.FIND`](#events.FIND).
 
 <a id="ui.find.find_prev"></a>
 #### `ui.find.find_prev`()
 
 Mimics pressing the "Find Prev" button.
+Emits [`events.FIND`](#events.FIND).
 
 <a id="ui.find.focus"></a>
 #### `ui.find.focus`([*options*])
@@ -9492,11 +9401,14 @@ Parameters:
 #### `ui.find.replace`()
 
 Mimics pressing the "Replace" button.
+Emits [`events.REPLACE`](#events.REPLACE) followed by [`events.FIND`](#events.FIND) unless any [`events.REPLACE`](#events.REPLACE) handler returns
+`true`.
 
 <a id="ui.find.replace_all"></a>
 #### `ui.find.replace_all`()
 
 Mimics pressing the "Replace All" button.
+Emits [`events.REPLACE_ALL`](#events.REPLACE_ALL).
 
 
 ---

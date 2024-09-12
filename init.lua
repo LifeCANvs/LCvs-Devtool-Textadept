@@ -32,6 +32,7 @@ for _, mt in ipairs{buffer_mt, view_mt} do
 	mt.__index = function(t, k)
 		local v = mt.__orig_index(t, k)
 		if type(v) == 'function' then
+			if k:find('^new_') and (k:find('_number$') or k:find('_type$')) then return v end
 			return function(...)
 				local args = {...}
 				if type(args[1]) == 'table' then table.remove(args, 1) end -- self
@@ -94,8 +95,12 @@ view:set_visible_policy(view.VISIBLE_SLOP | view.VISIBLE_STRICT, 5)
 -- view.h_scroll_bar = CURSES
 -- view.v_scroll_bar = false
 if CURSES and not (WIN32 or LINUX) then view.v_scroll_bar = false end
--- view.scroll_width =
--- view.scroll_width_tracking = true
+view.scroll_width = 1
+local function reset_scroll_width() _G.view.scroll_width = 1 end
+events.connect(events.BUFFER_NEW, reset_scroll_width)
+events.connect(events.BUFFER_AFTER_SWITCH, reset_scroll_width)
+events.connect(events.FILE_OPENED, reset_scroll_width)
+view.scroll_width_tracking = true
 -- view.end_at_last_line = false
 
 -- Whitespace.

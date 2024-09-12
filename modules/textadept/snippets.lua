@@ -187,7 +187,7 @@
 local M = {}
 
 --- The snippet placeholder indicator number.
-M.INDIC_PLACEHOLDER = _SCINTILLA.new_indic_number()
+M.INDIC_PLACEHOLDER = view.new_indic_number()
 
 --- List of directory paths to look for snippet files in.
 -- Filenames are of the form *lexer.trigger.ext* or *trigger.ext* (*.ext* is an optional,
@@ -221,8 +221,8 @@ M.transform_methods = {
 	end
 }
 
-local INDIC_SNIPPET = _SCINTILLA.new_indic_number()
-local INDIC_CURRENTPLACEHOLDER = _SCINTILLA.new_indic_number()
+local INDIC_SNIPPET = view.new_indic_number()
+local INDIC_CURRENTPLACEHOLDER = view.new_indic_number()
 
 --- Map of [snippet](#textadept.snippets) triggers with their snippet text or functions that
 -- return such text, with language-specific snippets tables assigned to a lexer name key.
@@ -268,9 +268,8 @@ local function find_snippet(grep, no_trigger)
 			if not grep and (p1 == lang and p2 == trigger or p1 == trigger and p3 == '') or
 				(grep and
 					(p1 == lang and p2 and p2:find(name_patt) or p1 and p1:find(name_patt) and p3 == '')) then
-				local f = io.open(string.format('%s/%s', M.paths[i], basename))
+				local f<close> = io.open(string.format('%s/%s', M.paths[i], basename))
 				local text = f:read('a')
-				f:close()
 				if not grep and p1 == lang then return trigger, text end
 				matching_snippets[p1 == lang and p2 or p1] = text
 			end
@@ -538,7 +537,7 @@ function snippet:next()
 		buffer:indicator_clear_range(pos, e - pos)
 		buffer:set_target_range(pos, pos + 1)
 		buffer:replace_target(text)
-		buffer:add_selection(pos, pos + #text)
+		buffer:add_selection(pos + #text, pos)
 		goto redo -- indicator positions have changed
 	end
 	buffer.main_selection = 1
