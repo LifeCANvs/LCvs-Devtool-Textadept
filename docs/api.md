@@ -1,4 +1,4 @@
-## Textadept 12.5 beta 2 API Documentation
+## Textadept 12.5 API Documentation
 
 1. [_G](#_G)
 1. [_L](#_L)
@@ -34,6 +34,11 @@
 Extends Lua's _G table to provide extra functions and fields for Textadept.
 
 ### Fields defined by `_G`
+
+<a id="BSD"></a>
+#### `BSD` 
+
+Whether or not Textadept is running on BSD.
 
 <a id="CURSES"></a>
 #### `CURSES` 
@@ -122,8 +127,9 @@ Manually changing this field has no effect.
 
 The path to the user's *~/.textadept/* directory, where all preferences and user-data is stored.
 On Windows machines *~/* is the value of the "USERHOME" environment variable (typically
-*C:\Users\username\\* or *C:\Documents and Settings\username\\*). On Linux and macOS machines
-*~/* is the value of "$HOME" (typically */home/username/* and */Users/username/* respectively).
+*C:\Users\username\\* or *C:\Documents and Settings\username\\*). On macOS and Linux/BSD
+machines *~/* is the value of "$HOME" (typically */Users/username/* and */home/username/*,
+respectively).
 
 <a id="_VIEWS"></a>
 #### `_VIEWS` &lt;table&gt;
@@ -3688,7 +3694,8 @@ Usage:
 #### `view.colors` &lt;table&gt;
 
 Map of color name strings to color values in `0xBBGGRR` format.
-The contents of this map is typically set by a theme.
+The contents of this map is typically set by a theme. Changing colors manually (e.g. via
+the command entry) has no effect since colors are referenced by value, not name.
 Note: for applications running within a terminal emulator, only 16 color values are recognized,
 regardless of how many colors a user's terminal actually supports. (A terminal emulator's
 settings determines how to actually display these recognized color values, which may end
@@ -3981,7 +3988,7 @@ The defalt value is `false`.
 #### `view.caret_line_visible_always` 
 
 Always show the caret line, even when the view is not in focus.
-The default value is `false`, showing the line only when the view is in focus.
+The default value is `true`, but only for the current view, and only while Textadept has focus.
 
 <a id="view.caret_line_layer"></a>
 #### `view.caret_line_layer` 
@@ -4815,7 +4822,7 @@ The buffer **must not** be modified during this event.
 
 Emitted right before switching to another buffer.
 The buffer being switched from is [`buffer`](#buffer).
-Emitted by [`view:goto_buffer()`](#view.goto_buffer).
+Emitted by [`view:goto_buffer()`](#view.goto_buffer) and `buffer.new()`.
 
 <a id="events.BUFFER_DELETED"></a>
 #### `events.BUFFER_DELETED` 
@@ -5298,7 +5305,7 @@ Emitted by [`ui.goto_view()`](#ui.goto_view).
 
 Emitted right before switching to another view.
 The view being switched from is [`view`](#view).
-Emitted by [`ui.goto_view()`](#ui.goto_view).
+Emitted by [`ui.goto_view()`](#ui.goto_view) and [`view:split()`](#view.split).
 
 <a id="events.VIEW_NEW"></a>
 #### `events.VIEW_NEW` 
@@ -5414,7 +5421,7 @@ Usage:
 
 Whether or not to ensure there is a final newline when saving text files.
 This has no effect on binary files.
-The default value is `false` on Windows, and `true` on Linux and macOS.
+The default value is `false` on Windows, and `true` on macOS, Linux, and BSD.
 
 <a id="io.quick_open_filters"></a>
 #### `io.quick_open_filters` &lt;table&gt;
@@ -5564,11 +5571,11 @@ completion, but fall back to word autocompletion if the first command fails.)
 ### Key Sequences
 
 Key sequences are strings built from an ordered combination of modifier keys and the key's
-inserted character. Modifier keys are "Control", "Shift", and "Alt" on Windows, Linux, and
-in the terminal version. On macOS they are "Control" (`^`), "Alt/Option" (`⌥`), "Command"
+inserted character. Modifier keys are "Control", "Shift", and "Alt" on Windows, Linux/BSD,
+and in the terminal version. On macOS they are "Control" (`^`), "Alt/Option" (`⌥`), "Command"
 (`⌘`), and "Shift" (`⇧`). These modifiers have the following string representations:
 
-Modifier |  Windows / Linux | macOS | Terminal
+Modifier |  Windows / Linux / BSD | macOS | Terminal
 -|-|-|-
 Control | `'ctrl'` | `'ctrl'` | `'ctrl'`
 Alt | `'alt'` | `'alt'` | `'meta'`
@@ -5577,7 +5584,7 @@ Shift | `'shift'` | `'shift'` | `'shift'`
 
 The string representation of key values less than 255 is the character that Textadept would
 normally insert if the "Control", "Alt", and "Command" modifiers were not held down. Therefore,
-a combination of `Ctrl+Alt+Shift+A` has the key sequence `ctrl+alt+A` on Windows and Linux,
+a combination of `Ctrl+Alt+Shift+A` has the key sequence `ctrl+alt+A` on Windows and Linux/BSD,
 but a combination of `Ctrl+Shift+Tab` has the key sequence `ctrl+shift+\t`. On a United States
 English keyboard, since the combination of `Ctrl+Shift+,` has the key sequence `ctrl+<`
 (`Shift+,` inserts a `<`), Textadept recognizes the key binding as `Ctrl+<`. This allows
@@ -5721,9 +5728,6 @@ language is similar to any of the 100+ languages supported. If so, you may be ab
 and modify, or inherit from that lexer, saving some time and effort. The filename of your
 lexer should be the name of your programming language in lower case followed by a *.lua*
 extension. For example, a new Lua lexer has the name *lua.lua*.
-
-Note: Try to refrain from using one-character language names like "c", "d", or "r". For
-example, Scintillua uses "ansi_c", "dmd", and "rstats", respectively.
 
 #### New Lexer Template
 
@@ -7613,8 +7617,7 @@ than an OS-specific pipe can hold may hang Textadept. On Linux, this may be 64K.
 
 Parameters:
 
-- *command*:  The Linux, macOS, or Windows shell command to filter text through. May
-	contain pipes.
+- *command*:  The OS shell command to filter text through. May contain pipes.
 
 <a id="textadept.editing.goto_line"></a>
 #### `textadept.editing.goto_line`([*line*])
@@ -7765,12 +7768,12 @@ They are designed to be as consistent as possible between operating systems and 
 so that users familiar with one set of bindings can intuit a given binding on another OS or
 platform, minimizing the need for memorization.
 
-In general, bindings for macOS are the same as for Windows/Linux except the "Control" modifier
-key on Windows/Linux is replaced by "Command" (`⌘`) and the "Alt" modifier key is replaced by
-"Control" (`^`). The only exception is for word- and paragraph-based movement keys, which use
-"Alt" (`⌥`) instead of "Command" (`⌘`).
+In general, bindings for macOS are the same as for Windows/Linux/BSD except the "Control"
+modifier key on Windows/Linux/BSD is replaced by "Command" (`⌘`) and the "Alt" modifier
+key is replaced by "Control" (`^`). The only exception is for word- and paragraph-based
+movement keys, which use "Alt" (`⌥`) instead of "Command" (`⌘`).
 
-In general, bindings for the terminal version are the same as for Windows/Linux except:
+In general, bindings for the terminal version are the same as for Windows/Linux/BSD except:
 
 - Most `Ctrl+Shift+`*`key`* combinations become `M-^`*`key`* since most terminals recognize
 	few, if any, `Ctrl+Shift` key sequences.
@@ -7789,7 +7792,7 @@ In general, bindings for the terminal version are the same as for Windows/Linux 
 
 ### Key Bindings
 
-Windows and Linux | macOS | Terminal | Command
+Windows, Linux, and BSD | macOS | Terminal | Command
 -|-|-|-
 **File**|||
 Ctrl+N | ⌘N | ^N | New file
@@ -7815,6 +7818,7 @@ Ctrl+Shift+D | ⌘⇧D | M-^D | Duplicate line/selection
 Del | ⌦<br/> ^D | Del | Delete
 Alt+Del | ^⌦ | M-Del | Delete word
 Ctrl+A | ⌘A | ^A | Select all
+Ctrl+Shift+A | ⌘⇧A | M-^A | Deselect
 Ctrl+M | ⌘M | M-M | Match brace
 Ctrl+Enter | ⌘↩ | ^Enter | Complete word
 Ctrl+/ | ⌘/ | ^/<br/>M-/ | Toggle block comment
@@ -8996,6 +9000,11 @@ Usage:
 
 The height in pixels of the command entry.
 
+<a id="ui.command_entry.label"></a>
+#### `ui.command_entry.label` 
+
+The text of the command entry label. (Write-only)
+
 
 ### Functions defined by `ui.command_entry`
 
@@ -9099,6 +9108,7 @@ Parameters:
  - `multiple`: Allow the user to select multiple items. The default value is `false`.
 	The terminal version does not support this option.
  - `search_column`: The column number to filter the input text against. The default value is `1`.
+ - `select`: The row number to initially select. The default value is `1`.
  - `return_button`: Also return the index of the selected button. The default value is `false`.
 
 Usage:

@@ -4,6 +4,20 @@
 -- @param item String menu path (e.g. 'File/New').
 local function click(item) textadept.menu.menubar[item][2]() end
 
+test('Edit > Deselect should undo a selection', function()
+	local word = 'word'
+	buffer:append_text(word .. ' ' .. word)
+	buffer:word_right()
+	ui.update() -- emit events.UPDATE_UI
+	if CURSES then events.emit(events.UPDATE_UI, buffer.UPDATE_SELECTION) end
+	local pos = buffer.current_pos
+
+	click('Edit/Select All')
+	click('Edit/Deselect')
+
+	test.assert_equal(buffer.current_pos, pos)
+end)
+
 test('Edit > Delete Word should delete the current word', function()
 	local word = 'word'
 	buffer:add_text(word .. ' ' .. word)
@@ -408,6 +422,19 @@ test('textadept.menu.tab_context_menu should be mutable', function()
 end)
 
 -- Coverage tests.
+
+test('activating menu items with shortcuts on macOS should emit events.KEYPRESS instead', function()
+	local keypress = test.stub()
+	local _<close> = test.connect(events.KEYPRESS, keypress, 1)
+
+	local OSX = OSX
+	local _<close> = test.mock(_G, 'OSX', true)
+	events.emit(events.MENU_CLICKED, 1) -- simulate cmd+n triggering File > New
+
+	test.assert_equal(keypress.called, 2) -- CLEAR and then ctrl/cmd+n
+	test.assert_equal(keypress.args, {(not OSX and 'ctrl' or 'cmd') .. '+n'})
+	test.assert_equal(#_BUFFERS, 2) -- not 3
+end)
 
 test('textadept.menu.menubar should be hideable', function()
 	textadept.menu.menubar = nil -- hide

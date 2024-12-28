@@ -9,6 +9,9 @@
 -- @module ui.command_entry
 local M = ui.command_entry
 
+--- The text of the command entry label. (Write-only)
+-- @field label
+
 --- The height in pixels of the command entry.
 -- @field height
 
@@ -56,8 +59,7 @@ M.editing_keys = {__index = {}}
 local bindings = {
 	-- Note: cannot use `M.cut`, `M.copy`, etc. since M is never considered the global buffer.
 	[function() M:undo() end] = {'ctrl+z', 'cmd+z', 'ctrl+z'},
-	[function() M:redo() end] = {'ctrl+y', 'cmd+Z', 'ctrl+y'},
-	[function() M:redo() end] = {'ctrl+Z', 'cmd+y', 'ctrl+meta+z'},
+	[function() M:redo() end] = {{'ctrl+y', 'ctrl+Z'}, {'cmd+Z', 'cmd+y'}, {'ctrl+y', 'ctrl+meta+z'}},
 	[function() M:cut() end] = {'ctrl+x', 'cmd+x', 'ctrl+x'},
 	[function() M:copy() end] = {'ctrl+c', 'cmd+c', 'ctrl+c'},
 	[function() M:paste() end] = {'ctrl+v', 'cmd+v', 'ctrl+v'},
@@ -67,13 +69,20 @@ local bindings = {
 	-- Movement keys.
 	[function() M:char_right() end] = {nil, 'ctrl+f', 'ctrl+f'},
 	[function() M:char_left() end] = {nil, 'ctrl+b', 'ctrl+b'},
-	[function() M:vc_home() end] = {nil, 'ctrl+a', nil},
-	[function() M:line_end() end] = {nil, 'ctrl+e', 'ctrl+e'},
-	[function() M:clear() end] = {nil, 'ctrl+d', 'ctrl+d'}
+	[function() M:word_right() end] = {nil, 'alt+right', nil},
+	[function() M:word_left() end] = {nil, 'alt+left', nil},
+	[function() M:vc_home() end] = {nil, {'ctrl+a', 'cmd+left'}, nil},
+	[function() M:line_end() end] = {nil, {'ctrl+e', 'cmd+right'}, 'ctrl+e'},
+	[function() M:clear() end] = {nil, {'del', 'ctrl+d'}, 'ctrl+d'}
 }
 local plat = CURSES and 3 or OSX and 2 or 1
 for f, plat_keys in pairs(bindings) do
-	if plat_keys[plat] then M.editing_keys.__index[plat_keys[plat]] = f end
+	local key = plat_keys[plat]
+	if type(key) == 'string' then
+		M.editing_keys.__index[key] = f
+	elseif type(key) == 'table' then
+		for _, key in ipairs(key) do M.editing_keys.__index[key] = f end
+	end
 end
 
 --- Environment for abbreviated Lua commands.
@@ -235,7 +244,7 @@ function M.run(label, f, keys, lang, initial_text, ...)
 	M:select_all()
 	if initial_text then M:line_end() end
 	prev_key_mode = _G.keys.mode -- save before M.focus()
-	M.margin_width_n[1], M.margin_text[1] = M:text_width(view.STYLE_LINENUMBER, label), label
+	M.label = label
 	M.focus()
 	M:set_lexer(lang or 'text')
 	M.height = M:text_height(1)
@@ -252,7 +261,7 @@ end
 -- Configure the command entry's default properties.
 events.connect(events.INITIALIZED, function()
 	M.h_scroll_bar, M.v_scroll_bar = false, false
-	for i = 1, M.margins do M.margin_width_n[i] = i ~= 2 and 0 or (not CURSES and 4 or 1) end
+	for i = 1, M.margins do M.margin_width_n[i] = 0 end
 	M.margin_type_n[1], M.margin_style[1] = view.MARGIN_TEXT, view.STYLE_LINENUMBER
 	M.call_tip_use_style = M.tab_width * M:text_width(view.STYLE_CALLTIP, ' ')
 	M.call_tip_position = true

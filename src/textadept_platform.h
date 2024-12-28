@@ -34,7 +34,7 @@ typedef struct {
 typedef struct {
 	const char *title, *text, *icon, *buttons[3], *dir, *file;
 	bool only_dirs, multiple, return_button;
-	int columns, search_column, items;
+	int columns, search_column, items, select;
 } DialogOptions;
 
 /** Contains information about a spawned child process.
@@ -193,6 +193,8 @@ bool is_find_active(void);
 void focus_command_entry(void);
 /** Returns whether or not the command entry is active. */
 bool is_command_entry_active(void);
+/** Sets the command entry's label text to the given text. */
+void set_command_entry_label(const char *text);
 /** Returns the height of the command entry. */
 int get_command_entry_height(void);
 /** Sets the height of the command entry. The command entry must be active. */

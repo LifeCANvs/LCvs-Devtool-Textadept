@@ -18,6 +18,14 @@ local menu_buffer_functions = {'undo','redo','cut','copy','paste','selection_dup
 for _, f in ipairs(menu_buffer_functions) do buffer[f] = buffer[f] end
 view.zoom_in, view.zoom_out = view.zoom_in, view.zoom_out
 
+--- Restores the previous non-selected caret position.
+local function deselect()
+	if buffer.selection_empty or not buffer._deselect_pos then return end
+	buffer:set_empty_selection(buffer._deselect_pos)
+end
+events.connect(events.UPDATE_UI, function(updated)
+	if updated & 3 > 0 and buffer.selection_empty then buffer._deselect_pos = buffer.current_pos end
+end)
 --- Wrapper around `buffer:upper_case()` and `buffer:lower_case()`.
 local function change_case(upper)
 	local select, pos = buffer.selection_empty, buffer.current_pos
@@ -92,6 +100,7 @@ local default_menubar = {
 				buffer:delete_back()
 			end
 		}, {_L['Select All'], buffer.select_all}, --
+		{_L['Deselect'], deselect}, --
 		SEPARATOR, {
 			_L['Match Brace'], function()
 				local match_pos = buffer:brace_match(buffer.current_pos, 0)
@@ -308,7 +317,7 @@ local default_menubar = {
 		}, {
 			_L['Toggle Virtual Space'], function()
 				buffer.virtual_space_options = buffer.virtual_space_options == 0 and
-					buffer.VS_USERACCESSIBLE or 0
+					buffer.VS_RECTANGULARSELECTION | buffer.VS_USERACCESSIBLE or 0
 			end
 		}, --
 		SEPARATOR, --
@@ -525,7 +534,15 @@ proxies.tab_context_menu = proxy_menu(default_tab_context_menu, function() end)
 events.connect(events.MENU_CLICKED, function(menu_id)
 	local items = menu_id < 1000 and menu_items or contextmenu_items
 	local f = items[menu_id < 1000 and menu_id or menu_id - 1000][2]
-	assert_type(f, 'function', 'command')()
+	if not OSX or not key_shortcuts[tostring(f)] then
+		assert_type(f, 'function', 'command')()
+	else
+		-- The macOS menubar eats key shortcuts, emits menu events, and prevents keypress events.
+		-- This affects user-defined key bindings, as well as command entry key bindings.
+		-- Instead of invoking a menu item's function, emit the keypress for its shortcut.
+		events.emit(events.KEYPRESS, keys.CLEAR)
+		events.emit(events.KEYPRESS, key_shortcuts[tostring(f)])
+	end
 end)
 
 --- Prompts the user to select a menu command to run.

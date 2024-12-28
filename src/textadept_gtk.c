@@ -15,7 +15,8 @@
 // GTK objects.
 static GtkWidget *window, *menubar, *tabbar, *statusbar[2];
 static GtkAccelGroup *accel;
-static GtkWidget *findbox, *find_entry, *repl_entry, *find_label, *repl_label;
+static GtkWidget *command_entry_box, *command_entry_label, *findbox, *find_entry, *repl_entry,
+	*find_label, *repl_label;
 static GtkListStore *find_history, *repl_history;
 
 static bool tab_sync;
@@ -167,26 +168,30 @@ void new_window(SciObject *(*get_view)(void)) {
 	gtk_box_pack_start(GTK_BOX(vbox), tabbar, false, false, 0);
 
 	GtkWidget *paned = gtk_vpaned_new();
-	GtkWidget *vboxp = gtk_vbox_new(false, 0), *hboxp = gtk_hbox_new(false, 0);
-	gtk_box_pack_start(GTK_BOX(hboxp), get_view(), true, true, 0);
-	gtk_box_pack_start(GTK_BOX(vboxp), hboxp, true, true, 0);
-	gtk_box_pack_start(GTK_BOX(vboxp), new_findbox(), false, false, 5);
-	gtk_paned_add1(GTK_PANED(paned), vboxp);
-	gtk_paned_add2(GTK_PANED(paned), command_entry);
-	gtk_container_child_set(GTK_CONTAINER(paned), command_entry, "shrink", false, NULL);
+	GtkWidget *editors = gtk_hbox_new(false, 0);
+	gtk_box_pack_start(GTK_BOX(editors), get_view(), true, true, 0);
+	gtk_paned_add1(GTK_PANED(paned), editors);
+	command_entry_box = gtk_hbox_new(false, 0);
+	command_entry_label = gtk_label_new(""), gtk_label_set_yalign(GTK_LABEL(command_entry_label), 0);
+	gtk_box_pack_start(GTK_BOX(command_entry_box), command_entry_label, false, false, 5);
+	gtk_box_pack_start(GTK_BOX(command_entry_box), command_entry, true, true, 5);
+	gtk_paned_add2(GTK_PANED(paned), command_entry_box);
+	gtk_container_child_set(GTK_CONTAINER(paned), command_entry_box, "shrink", false, NULL);
 	gtk_box_pack_start(GTK_BOX(vbox), paned, true, true, 0);
+
+	gtk_box_pack_start(GTK_BOX(vbox), new_findbox(), false, false, 0);
 
 	GtkWidget *hbox = gtk_hbox_new(false, 0);
 	gtk_box_pack_start(GTK_BOX(hbox), statusbar[0] = gtk_label_new(NULL), true, true, 5);
 	gtk_misc_set_alignment(GTK_MISC(statusbar[0]), 0, 0); // left-align
 	gtk_box_pack_start(GTK_BOX(hbox), statusbar[1] = gtk_label_new(NULL), false, false, 5);
-	gtk_box_pack_start(GTK_BOX(vbox), hbox, false, false, 1);
+	gtk_box_pack_start(GTK_BOX(vbox), hbox, false, false, 0);
 
 	gtk_container_add(GTK_CONTAINER(window), vbox);
 
 	gtk_widget_show_all(window), gtk_widget_grab_focus(focused_view);
 	gtk_widget_hide(menubar), gtk_widget_hide(tabbar), gtk_widget_hide(findbox),
-		gtk_widget_hide(command_entry); // hide initially
+		gtk_widget_hide(command_entry_box); // hide initially
 }
 
 void set_title(const char *title) { gtk_window_set_title(GTK_WINDOW(window), title); }
@@ -356,21 +361,40 @@ const char *get_repl_text(void) { return gtk_entry_get_text(GTK_ENTRY(repl_entry
 void set_find_text(const char *text) { gtk_entry_set_text(GTK_ENTRY(find_entry), text); }
 void set_repl_text(const char *text) { gtk_entry_set_text(GTK_ENTRY(repl_entry), text); }
 
-// Adds the given text to the given list store.
+// Contains information for removing a duplicate find/replace history item.
+typedef struct {
+	GtkListStore *store;
+	const char *text;
+} FindDuplicateData;
+
+// Removes a duplicate find/replace history item.
+static int remove_duplicate(GtkTreeModel *model, GtkTreePath *_, GtkTreeIter *iter, void *data_) {
+	FindDuplicateData *data = data_;
+	char *text = NULL;
+	gtk_tree_model_get(model, iter, 0, &text, -1);
+	int found = strcmp(data->text, text) == 0;
+	if (found) gtk_list_store_remove(data->store, iter);
+	return (free(text), found);
+}
+
+// Adds the given text to the given list store, removing duplicates.
 // Note: GtkComboBoxEntry key navigation behaves contrary to command line history
 // navigation. Down cycles from newer to older, and up cycles from older to newer. In order to
 // mimic traditional command line history navigation, append to the list instead of prepending
 // to it.
 static void add_to_history(GtkListStore *store, const char *text) {
-	int n = gtk_tree_model_iter_n_children(GTK_TREE_MODEL(store), NULL);
 	GtkTreeIter iter;
-	char *last_text = NULL;
-	if (n > 0)
+	int n = gtk_tree_model_iter_n_children(GTK_TREE_MODEL(store), NULL);
+	if (n > 0) {
+		char *last_text = NULL;
 		gtk_tree_model_iter_nth_child(GTK_TREE_MODEL(store), &iter, NULL, n - 1),
 			gtk_tree_model_get(GTK_TREE_MODEL(store), &iter, 0, &last_text, -1);
-	if (!last_text || strcmp(text, last_text) != 0)
-		gtk_list_store_append(store, &iter), gtk_list_store_set(store, &iter, 0, text, -1);
-	free(last_text);
+		bool add = strcmp(text, last_text) != 0;
+		if (free(last_text), !add) return; // duplicate
+		FindDuplicateData data = {store, text};
+		gtk_tree_model_foreach(GTK_TREE_MODEL(store), remove_duplicate, &data);
+	}
+	gtk_list_store_append(store, &iter), gtk_list_store_set(store, &iter, 0, text, -1);
 }
 
 void add_to_find_history(const char *text) { add_to_history(find_history, text); }
@@ -396,18 +420,21 @@ void focus_find(void) {
 bool is_find_active(void) { return gtk_widget_get_visible(findbox); }
 
 void focus_command_entry(void) {
-	if (!gtk_widget_get_visible(command_entry))
-		gtk_widget_show(command_entry), gtk_widget_grab_focus(command_entry);
+	if (!gtk_widget_get_visible(command_entry_box))
+		gtk_widget_show(command_entry_box), gtk_widget_grab_focus(command_entry);
 	else
-		gtk_widget_grab_focus(focused_view), gtk_widget_hide(command_entry);
+		gtk_widget_grab_focus(focused_view), gtk_widget_hide(command_entry_box);
 }
 bool is_command_entry_active(void) { return gtk_widget_has_focus(command_entry); }
+void set_command_entry_label(const char *text) {
+	gtk_label_set_text(GTK_LABEL(command_entry_label), text);
+}
 int get_command_entry_height(void) {
 	GtkAllocation allocation;
 	return (gtk_widget_get_allocation(command_entry, &allocation), allocation.height);
 }
 void set_command_entry_height(int height) {
-	GtkWidget *paned = gtk_widget_get_parent(command_entry);
+	GtkWidget *paned = gtk_widget_get_parent(command_entry_box);
 	GtkAllocation allocation;
 	gtk_widget_get_allocation(paned, &allocation);
 	gtk_widget_set_size_request(command_entry, -1, height);
@@ -429,28 +456,30 @@ void *read_menu(lua_State *L, int index) {
 	}
 	lua_pop(L, 1); // title
 	for (size_t i = 1; i <= lua_rawlen(L, index); lua_pop(L, 1), i++) {
-		if (lua_rawgeti(L, -1, i) != LUA_TTABLE) continue; // popped on loop
+		if (lua_rawgeti(L, index, i) != LUA_TTABLE) continue; // popped on loop
 		bool is_submenu = lua_getfield(L, -1, "title");
 		if (lua_pop(L, 1), is_submenu) {
 			gtk_menu_shell_append(GTK_MENU_SHELL(menu), read_menu(L, -1));
 			continue;
 		}
 		const char *label = (lua_rawgeti(L, -1, 1), lua_tostring(L, -1));
-		if (lua_pop(L, 1), !label) continue;
-		// Menu item table is of the form {label, id, key, modifiers}.
-		GtkWidget *menu_item =
-			*label ? gtk_menu_item_new_with_mnemonic(label) : gtk_separator_menu_item_new();
-		if (*label && get_int_field(L, -1, 3) > 0) {
-			int key = get_int_field(L, -1, 3), modifiers = get_int_field(L, -1, 4), gdk_mods = 0;
-			if (modifiers & SCMOD_SHIFT) gdk_mods |= GDK_SHIFT_MASK;
-			if (modifiers & SCMOD_CTRL) gdk_mods |= GDK_CONTROL_MASK;
-			if (modifiers & SCMOD_ALT) gdk_mods |= GDK_MOD1_MASK;
-			if (modifiers & SCMOD_META) gdk_mods |= GDK_META_MASK;
-			gtk_widget_add_accelerator(menu_item, "activate", accel, key, gdk_mods, GTK_ACCEL_VISIBLE);
+		if (label) {
+			// Menu item table is of the form {label, id, key, modifiers}.
+			GtkWidget *menu_item =
+				*label ? gtk_menu_item_new_with_mnemonic(label) : gtk_separator_menu_item_new();
+			if (*label && get_int_field(L, -2, 3) > 0) {
+				int key = get_int_field(L, -2, 3), modifiers = get_int_field(L, -2, 4), gdk_mods = 0;
+				if (modifiers & SCMOD_SHIFT) gdk_mods |= GDK_SHIFT_MASK;
+				if (modifiers & SCMOD_CTRL) gdk_mods |= GDK_CONTROL_MASK;
+				if (modifiers & SCMOD_ALT) gdk_mods |= GDK_MOD1_MASK;
+				if (modifiers & SCMOD_META) gdk_mods |= GDK_META_MASK;
+				gtk_widget_add_accelerator(menu_item, "activate", accel, key, gdk_mods, GTK_ACCEL_VISIBLE);
+			}
+			g_signal_connect(
+				menu_item, "activate", G_CALLBACK(menu_clicked), (void *)(long)get_int_field(L, -2, 2));
+			gtk_menu_shell_append(GTK_MENU_SHELL(menu), menu_item);
 		}
-		g_signal_connect(
-			menu_item, "activate", G_CALLBACK(menu_clicked), (void *)(long)get_int_field(L, -1, 2));
-		gtk_menu_shell_append(GTK_MENU_SHELL(menu), menu_item);
+		lua_pop(L, 1); // label
 	}
 	return !submenu_root ? menu : submenu_root;
 }
@@ -645,21 +674,22 @@ static int visible(GtkTreeModel *model, GtkTreeIter *iter, void *treeview) {
 	return matches(model, gtk_tree_view_get_search_column(treeview), key, iter, NULL) == 0;
 }
 
-// Selects the first item in the given view if an item is not already selected.
+// Selects the nth item in the given view if an item is not already selected.
 // This is needed particularly when initially showing the list with no search key and after
 // clearing the search key and refiltering.
-static void select_first_item(GtkTreeView *view) {
+static void select_nth_item(GtkTreeView *view, int n) {
 	GtkTreeSelection *selection = gtk_tree_view_get_selection(view);
 	if (gtk_tree_selection_count_selected_rows(selection) > 0) return; // already selected
 	GtkTreeIter iter;
-	if (gtk_tree_model_get_iter_first(gtk_tree_view_get_model(view), &iter))
-		gtk_tree_selection_select_iter(selection, &iter);
+	if (!gtk_tree_model_get_iter_first(gtk_tree_view_get_model(view), &iter)) return;
+	for (int i = 1; i < n; i++) gtk_tree_model_iter_next(gtk_tree_view_get_model(view), &iter);
+	gtk_tree_selection_select_iter(selection, &iter);
 }
 
 // Signal for showing and hiding list values/rows depending on the current search key.
 static void refilter(GtkEditable *_, void *view) {
 	gtk_tree_model_filter_refilter(GTK_TREE_MODEL_FILTER(gtk_tree_view_get_model(view))),
-		select_first_item(view);
+		select_nth_item(view, 1);
 }
 
 // Signal for an entry keypress.
@@ -717,10 +747,13 @@ int list_dialog(DialogOptions opts, lua_State *L) {
 						*treeview = gtk_tree_view_new_with_model(filter);
 	gtk_window_set_resizable(GTK_WINDOW(dialog), true);
 	GtkDialog *dlg = GTK_DIALOG(dialog);
-	gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(dlg)), entry, false, true, 5);
+	GtkWidget *hbox = gtk_hbox_new(false, 0), *vbox = gtk_vbox_new(false, 10);
+	gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(dlg)), hbox, true, true, 0);
+	gtk_box_pack_start(GTK_BOX(hbox), vbox, true, true, 10);
+	gtk_box_pack_start(GTK_BOX(vbox), entry, false, true, 0);
 	gtk_entry_set_activates_default(GTK_ENTRY(entry), true);
 	GtkWidget *scrolled = gtk_scrolled_window_new(NULL, NULL);
-	gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(dlg)), scrolled, true, true, 5);
+	gtk_box_pack_start(GTK_BOX(vbox), scrolled, true, true, 0);
 	gtk_container_add(GTK_CONTAINER(scrolled), treeview);
 	gtk_tree_model_filter_set_visible_func(GTK_TREE_MODEL_FILTER(filter), visible, treeview, NULL);
 	for (int i = 1; i <= num_columns; i++) {
@@ -743,7 +776,7 @@ int list_dialog(DialogOptions opts, lua_State *L) {
 	if (opts.multiple) gtk_tree_selection_set_mode(selection, GTK_SELECTION_MULTIPLE);
 	// Set entry text here to initialize interactive search.
 	if (opts.text) gtk_entry_set_text(GTK_ENTRY(entry), opts.text);
-	select_first_item(GTK_TREE_VIEW(treeview));
+	select_nth_item(GTK_TREE_VIEW(treeview), opts.select);
 	gtk_widget_show_all(dialog); // compute and draw columns
 	int treeview_width = 0;
 	for (int i = 0; i < num_columns; i++) {

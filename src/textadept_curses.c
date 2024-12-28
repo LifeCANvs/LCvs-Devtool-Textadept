@@ -30,7 +30,9 @@ static CDKSCREEN *findbox;
 static CDKENTRY *find_entry, *repl_entry, *focused_entry;
 static char *find_text, *repl_text, *find_label, *repl_label;
 static bool find_options[4];
-static char *button_labels[4], *option_labels[4], *find_history[10], *repl_history[10];
+#define HIST_MAX 100
+static char *button_labels[4], *option_labels[4], *find_history[HIST_MAX], *repl_history[HIST_MAX];
+static char *command_entry_label;
 static bool command_entry_active;
 static int statusbar_length[2];
 TermKey *ta_tk; // global for CDK use
@@ -95,8 +97,6 @@ static void resize_pane(struct Pane *pane, int rows, int cols, int y, int x) {
 
 void new_window(SciObject *(*get_view)(void)) {
 	root_pane = new_pane(get_view()), resize_pane(root_pane, LINES - 2, COLS, 1, 0);
-	wresize(scintilla_get_window(command_entry), 1, COLS);
-	mvwin(scintilla_get_window(command_entry), LINES - 2, 0);
 }
 
 void set_title(const char *title) {
@@ -237,11 +237,17 @@ const char *get_repl_text(void) { return repl_text; }
 void set_find_text(const char *text) { copyfree(&find_text, text); }
 void set_repl_text(const char *text) { copyfree(&repl_text, text); }
 
-// Adds the given text to the given store.
+// Adds the given text to the given store, removing duplicates.
 static void add_to_history(char **store, const char *text) {
 	if (!text || (store[0] && strcmp(text, store[0]) == 0)) return;
-	if (store[9]) free(store[9]);
-	for (int i = 9; i > 0; i--) store[i] = store[i - 1];
+	for (int i = 1; i < HIST_MAX && store[i]; i++)
+		if (strcmp(text, store[i]) == 0) { // remove this duplicate
+			for (int j = i + 1; j < HIST_MAX; j++) store[j - 1] = store[j];
+			store[HIST_MAX - 1] = NULL;
+			break;
+		}
+	if (store[HIST_MAX - 1]) free(store[HIST_MAX - 1]);
+	for (int i = HIST_MAX - 1; i > 0; i--) store[i] = store[i - 1];
 	store[0] = NULL, copyfree(&store[0], text);
 }
 
@@ -272,7 +278,8 @@ void set_option_label(FindOption *option, const char *text) {
 // Refreshes the entire screen.
 static void refresh_all(void) {
 	refresh_pane(root_pane), refresh();
-	if (command_entry_active) scintilla_noutrefresh(command_entry);
+	if (command_entry_active)
+		mvaddstr(LINES - 2, 0, command_entry_label), refresh(), scintilla_noutrefresh(command_entry);
 	if (!findbox) scintilla_update_cursor(!command_entry_active ? focused_view : command_entry);
 }
 
@@ -295,10 +302,11 @@ static int find_keypress(EObjectType _, void *object, void *data, chtype key) {
 	} else if (key == CDK_PREV || key == CDK_NEXT) {
 		char **store = entry == find_entry ? find_history : repl_history;
 		int i;
-		for (i = 9; i >= 0; i--)
+		for (i = HIST_MAX - 1; i >= 0; i--)
 			if (store[i] && strcmp(store[i], text) == 0) break;
 		key == CDK_PREV ? i++ : i--;
-		if (i >= 0 && i <= 9 && store[i]) setCDKEntryValue(entry, store[i]), drawCDKEntry(entry, false);
+		if (i >= 0 && i < HIST_MAX && store[i])
+			setCDKEntryValue(entry, store[i]), drawCDKEntry(entry, false);
 	} else if (key >= KEY_F(1) && key <= KEY_F(4)) {
 		toggle(&find_options[key - KEY_F(1)], !find_options[key - KEY_F(1)]);
 		// Redraw the optionbox.
@@ -371,18 +379,30 @@ void focus_find(void) {
 
 bool is_find_active(void) { return findbox != NULL; }
 
+// Resizes and repositions the command entry, taking label width into account.
+static void resize_command_entry(void) {
+	WINDOW *win = scintilla_get_window(command_entry);
+	int height = get_command_entry_height(), label_width = utf8strlen(command_entry_label);
+	wresize(win, height, COLS - label_width), mvwin(win, LINES - 1 - height, label_width);
+}
+
 void focus_command_entry(void) {
-	if (!(command_entry_active = !command_entry_active)) SS(command_entry, SCI_SETFOCUS, 0, 0);
-	focus_view(command_entry_active ? command_entry : focused_view);
+	if ((command_entry_active = !command_entry_active))
+		resize_command_entry(), focus_view(command_entry);
+	else
+		SS(command_entry, SCI_SETFOCUS, 0, 0), focus_view(focused_view);
 }
 
 bool is_command_entry_active(void) { return command_entry_active; }
+
+void set_command_entry_label(const char *text) { copyfree(&command_entry_label, text); }
 
 int get_command_entry_height(void) { return getmaxy(scintilla_get_window(command_entry)); }
 
 void set_command_entry_height(int height) {
 	WINDOW *win = scintilla_get_window(command_entry);
-	wresize(win, height, COLS), mvwin(win, LINES - 1 - height, 0);
+	int label_width = utf8strlen(command_entry_label);
+	wresize(win, height, COLS - label_width), mvwin(win, LINES - 1 - height, label_width);
 }
 
 void set_statusbar_text(int bar, const char *text) {
@@ -749,7 +769,9 @@ int list_dialog(DialogOptions opts, lua_State *L) {
 	setCDKEntryPostProcess(entry, refilter, &data);
 	if (opts.text) setCDKEntryValue(entry, (char *)opts.text);
 
-	draw_dialog(&dialog), refilter(vENTRY, entry, &data, 0), activateCDKEntry(entry, NULL);
+	draw_dialog(&dialog), refilter(vENTRY, entry, &data, 0);
+	for (int i = 1; i < opts.select; i++) injectCDKEntry(entry, KEY_DOWN);
+	activateCDKEntry(entry, NULL);
 	// Note: buttons are right-to-left.
 	int button = (entry->exitType == vNORMAL) ? box->buttonCount - box->currentButton : 0;
 	int index = getCDKScrollItems(scroll, NULL) > 0 ? getCDKScrollCurrentItem(scroll) + 1 : 0;
@@ -885,13 +907,14 @@ static void signalled(int signal) {
 	if (signal == SIGCONT) termkey_start(ta_tk);
 	struct winsize w;
 	ioctl(0, TIOCGWINSZ, &w);
-	resizeterm(w.ws_row, w.ws_col), resize_pane(root_pane, LINES - 2, COLS, 1, 0);
-	WINDOW *win = scintilla_get_window(command_entry);
-	wresize(win, 1, COLS), mvwin(win, LINES - 1 - getmaxy(win), 0);
+	resizeterm(w.ws_row, w.ws_col), resize_pane(root_pane, LINES - 2, COLS, 1, 0),
+		resize_command_entry();
 	if (signal == SIGCONT) emit("resume", -1);
 	emit("update_ui", LUA_TNUMBER, 0, -1), refresh_all();
 }
 #endif
+
+static bool bracketed_paste;
 
 // Replacement for `termkey_waitkey()` that handles asynchronous I/O.
 static TermKeyResult textadept_waitkey(TermKey *tk, TermKeyKey *key) {
@@ -900,7 +923,7 @@ static TermKeyResult textadept_waitkey(TermKey *tk, TermKeyKey *key) {
 	while (true) {
 #if !_WIN32
 		struct pollfd fd = {.fd = 0, .events = POLLIN};
-		if (poll(&fd, 1, 50) > 0) termkey_advisereadable(tk); // 50 ms
+		if (poll(&fd, 1, !bracketed_paste ? 50 : 0) > 0) termkey_advisereadable(tk); // 50 ms
 		TermKeyResult res = !force ? termkey_getkey(tk, key) : termkey_getkey_force(tk, key);
 		if (res != TERMKEY_RES_AGAIN && res != TERMKEY_RES_NONE) return res;
 		force = res == TERMKEY_RES_AGAIN;
@@ -926,6 +949,7 @@ int main(int argc, char **argv) {
 		else if ((strcmp("-L", argv[i]) == 0 || strcmp("--lua", argv[i]) == 0) && i + 1 < argc)
 			return (init_textadept(argc, argv), exit_status); // avoid curses init
 	ta_tk = termkey_new(0, termkey_flags);
+	if (!ta_tk) return (fprintf(stderr, "could not initialize termkey: %s\n", strerror(errno)), 1);
 	setlocale(LC_CTYPE, ""); // for displaying UTF-8 characters properly
 	initscr(); // raw()/cbreak() and noecho() are taken care of in libtermkey
 	find_next = &button_labels[0], replace = &button_labels[1], find_prev = &button_labels[2],
@@ -965,6 +989,7 @@ int main(int argc, char **argv) {
 			termkey_interpret_csi(ta_tk, &key, args, &nargs, &cmd);
 			lua_newtable(lua);
 			for (size_t i = 0; i < nargs; i++) lua_pushinteger(lua, args[i]), lua_rawseti(lua, -2, i + 1);
+			bracketed_paste = cmd == '~' && args[0] == 200;
 			emit("csi", LUA_TNUMBER, cmd, LUA_TTABLE, luaL_ref(lua, LUA_REGISTRYINDEX), -1);
 		} else if (key.type == TERMKEY_TYPE_MOUSE)
 			termkey_interpret_mouse(ta_tk, &key, (TermKeyMouseEvent *)&event, &button, &y, &x), y--, x--;
@@ -987,10 +1012,11 @@ int main(int argc, char **argv) {
 	free(root_pane), free(find_label), free(repl_label);
 	if (find_text) free(find_text);
 	if (repl_text) free(repl_text);
-	for (int i = 0; i < 10; i++) {
+	for (int i = 0; i < HIST_MAX; i++) {
 		if (find_history[i]) free(find_history[i]);
 		if (repl_history[i]) free(repl_history[i]);
 		if (i < 4) free(button_labels[i]), free(option_labels[i] - (find_options[i] ? 0 : 4));
 	}
+	if (command_entry_label) free(command_entry_label);
 	return exit_status;
 }

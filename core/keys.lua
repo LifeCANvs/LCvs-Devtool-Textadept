@@ -20,11 +20,11 @@
 -- ### Key Sequences
 --
 -- Key sequences are strings built from an ordered combination of modifier keys and the key's
--- inserted character. Modifier keys are "Control", "Shift", and "Alt" on Windows, Linux, and
--- in the terminal version. On macOS they are "Control" (`^`), "Alt/Option" (`⌥`), "Command"
+-- inserted character. Modifier keys are "Control", "Shift", and "Alt" on Windows, Linux/BSD,
+-- and in the terminal version. On macOS they are "Control" (`^`), "Alt/Option" (`⌥`), "Command"
 -- (`⌘`), and "Shift" (`⇧`). These modifiers have the following string representations:
 --
--- Modifier |  Windows / Linux | macOS | Terminal
+-- Modifier |  Windows / Linux / BSD | macOS | Terminal
 -- -|-|-|-
 -- Control | `'ctrl'` | `'ctrl'` | `'ctrl'`
 -- Alt | `'alt'` | `'alt'` | `'meta'`
@@ -33,7 +33,7 @@
 --
 -- The string representation of key values less than 255 is the character that Textadept would
 -- normally insert if the "Control", "Alt", and "Command" modifiers were not held down. Therefore,
--- a combination of `Ctrl+Alt+Shift+A` has the key sequence `ctrl+alt+A` on Windows and Linux,
+-- a combination of `Ctrl+Alt+Shift+A` has the key sequence `ctrl+alt+A` on Windows and Linux/BSD,
 -- but a combination of `Ctrl+Shift+Tab` has the key sequence `ctrl+shift+\t`. On a United States
 -- English keyboard, since the combination of `Ctrl+Shift+,` has the key sequence `ctrl+<`
 -- (`Shift+,` inserts a `<`), Textadept recognizes the key binding as `Ctrl+<`. This allows
@@ -174,6 +174,7 @@ local function key_command(prefix)
 	end
 	if type(key) ~= 'function' and type(key) ~= 'table' then return INVALID end
 	if type(key) == 'table' and (not getmetatable(key) or not getmetatable(key).__call) then
+		if key._lexer and prefix == M.mode then return PROPAGATE end -- typed key matches lexer name
 		ui.statusbar_text = string.format('%s %s', _L['Keychain:'], table.concat(keychain, ' '))
 		return CHAIN
 	end
@@ -212,6 +213,6 @@ end)
 -- lexer name key.
 -- @table _G.keys
 
-for _, name in ipairs(lexer.names()) do M[name] = {} end
+for _, name in ipairs(lexer.names()) do M[name] = {_lexer = true} end
 
 return M

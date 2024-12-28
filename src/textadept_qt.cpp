@@ -56,7 +56,7 @@ static ScintillaEditBase *SCI(SciObject *sci) { return static_cast<ScintillaEdit
 
 void new_window(SciObject *(*get_view)(void)) {
 	ta = new Textadept;
-	ta->ui->editors->addWidget(SCI(get_view())), ta->ui->splitter->addWidget(SCI(command_entry));
+	ta->ui->editors->addWidget(SCI(get_view())), ta->ui->commandEntry->addWidget(SCI(command_entry));
 	ta->show();
 }
 
@@ -223,9 +223,12 @@ const char *get_repl_text() {
 }
 void set_find_text(const char *text) { ta->ui->findCombo->setCurrentText(text); }
 void set_repl_text(const char *text) { ta->ui->replaceCombo->setCurrentText(text); }
-static void add_to_history(QComboBox *combo, const char *text) {
-	if (int n = combo->count(); combo->itemText(n - 1) != text)
-		combo->addItem(text), combo->setCurrentIndex(n);
+// Adds the given text to the given combo, removing duplicates.
+static void add_to_history(QComboBox *combo, const char *text_) {
+	QString text{text_}; // copy since combo->removeItem() changes the contents of text_!
+	if (int n = combo->count(); combo->itemText(n - 1) == text) return;
+	if (int i = combo->findText(text); i != -1) combo->removeItem(i);
+	combo->addItem(text), combo->setCurrentIndex(combo->count() - 1);
 }
 void add_to_find_history(const char *text) { add_to_history(ta->ui->findCombo, text); }
 void add_to_repl_history(const char *text) { add_to_history(ta->ui->replaceCombo, text); }
@@ -257,16 +260,17 @@ void focus_find() {
 bool is_find_active() { return ta->ui->findBox->isVisible(); }
 
 void focus_command_entry() {
-	if (!SCI(command_entry)->isVisible())
-		SCI(command_entry)->show(), SCI(command_entry)->setFocus();
+	if (!ta->ui->commandEntryFrame->isVisible())
+		ta->ui->commandEntryFrame->show(), SCI(command_entry)->setFocus();
 	else
-		SCI(focused_view)->setFocus(), SCI(command_entry)->hide();
+		SCI(focused_view)->setFocus(), ta->ui->commandEntryFrame->hide();
 }
 bool is_command_entry_active() { return SCI(command_entry)->hasFocus(); }
+void set_command_entry_label(const char *text) { ta->ui->commandEntryLabel->setText(text); }
 int get_command_entry_height() { return SCI(command_entry)->height(); }
 void set_command_entry_height(int height) {
 	SCI(command_entry)->setMinimumHeight(height);
-	qobject_cast<QSplitter *>(SCI(command_entry)->parent())->setSizes(QList<int>{ta->height()});
+	ta->ui->splitter->setSizes(QList<int>{ta->height()});
 }
 
 void set_statusbar_text(int bar, const char *text) {
@@ -278,32 +282,34 @@ void *read_menu(lua_State *L, int index) {
 	if (lua_getfield(L, index, "title")) menu->setTitle(lua_tostring(L, -1)); // submenu title
 	lua_pop(L, 1); // title
 	for (size_t i = 1; i <= lua_rawlen(L, index); lua_pop(L, 1), i++) {
-		if (lua_rawgeti(L, -1, i) != LUA_TTABLE) continue; // popped on loop
+		if (lua_rawgeti(L, index, i) != LUA_TTABLE) continue; // popped on loop
 		if (bool isSubmenu = lua_getfield(L, -1, "title"); lua_pop(L, 1), isSubmenu) {
 			auto submenu = static_cast<QMenu *>(read_menu(L, -1));
 			menu->addMenu(submenu); // menu does not take ownership
 			continue;
 		}
 		const char *label = (lua_rawgeti(L, -1, 1), lua_tostring(L, -1));
-		if (lua_pop(L, 1), !label) continue;
-		// Menu item table is of the form {label, id, key, modifiers}.
-		QAction *menuItem = *label ? menu->addAction(label) : menu->addSeparator();
-		if (*label && get_int_field(L, -1, 3) > 0) {
-			int key = get_int_field(L, -1, 3), modifiers = get_int_field(L, -1, 4), qtModifiers = 0;
-			if (modifiers & SCMOD_SHIFT) qtModifiers += Qt::SHIFT;
+		if (label) {
+			// Menu item table is of the form {label, id, key, modifiers}.
+			QAction *menuItem = *label ? menu->addAction(label) : menu->addSeparator();
+			if (*label && get_int_field(L, -2, 3) > 0) {
+				int key = get_int_field(L, -2, 3), modifiers = get_int_field(L, -2, 4), qtModifiers = 0;
+				if (modifiers & SCMOD_SHIFT) qtModifiers += Qt::SHIFT;
 #if !__APPLE__
-			if (modifiers & SCMOD_CTRL) qtModifiers += Qt::CTRL;
+				if (modifiers & SCMOD_CTRL) qtModifiers += Qt::CTRL;
 #else
-			if (modifiers & SCMOD_CTRL) qtModifiers += Qt::META;
-			if (modifiers & SCMOD_META) qtModifiers += Qt::CTRL;
+				if (modifiers & SCMOD_CTRL) qtModifiers += Qt::META;
+				if (modifiers & SCMOD_META) qtModifiers += Qt::CTRL;
 #endif
-			if (modifiers & SCMOD_ALT) qtModifiers += Qt::ALT;
-			menuItem->setShortcut(QKeySequence{qtModifiers + key});
-			menuItem->setShortcutContext(Qt::ShortcutContext::WidgetShortcut);
+				if (modifiers & SCMOD_ALT) qtModifiers += Qt::ALT;
+				menuItem->setShortcut(QKeySequence{qtModifiers + key});
+				menuItem->setShortcutContext(Qt::ShortcutContext::WidgetShortcut);
+			}
+			int id = get_int_field(L, -2, 2);
+			QObject::connect(
+				menuItem, &QAction::triggered, menu, [id]() { emit("menu_clicked", LUA_TNUMBER, id, -1); });
 		}
-		int id = get_int_field(L, -1, 2);
-		QObject::connect(
-			menuItem, &QAction::triggered, menu, [id]() { emit("menu_clicked", LUA_TNUMBER, id, -1); });
+		lua_pop(L, 1); // label
 	}
 	return menu;
 }
@@ -496,7 +502,8 @@ int list_dialog(DialogOptions opts, lua_State *L) {
 				filter.index(0, 0), QItemSelectionModel::Select | QItemSelectionModel::Rows);
 		});
 	if (opts.text) lineEdit->setText(opts.text);
-	selection->select(filter.index(0, 0), QItemSelectionModel::Select | QItemSelectionModel::Rows);
+	selection->select(
+		filter.index(opts.select - 1, 0), QItemSelectionModel::Select | QItemSelectionModel::Rows);
 	lineEdit->installEventFilter(new KeyForwarder{treeView, &dialog});
 	auto buttonBox = new QDialogButtonBox;
 	int buttonClicked = 1; // ok/accept by default
@@ -698,7 +705,7 @@ Textadept::Textadept(QWidget *parent) : QMainWindow{parent}, ui{new Ui::Textadep
 	connect(ui->replaceAll, &QPushButton::clicked, this, clicked);
 
 	statusBar()->addPermanentWidget(docStatusBar = new QLabel);
-	ui->tabFrame->hide(), SCI(command_entry)->hide(), ui->findBox->hide();
+	ui->tabFrame->hide(), ui->commandEntryFrame->hide(), ui->findBox->hide();
 }
 
 void Textadept::closeEvent(QCloseEvent *ev) {
@@ -763,6 +770,9 @@ public:
 		connect(this, &QApplication::aboutToQuit, this, &close_textadept);
 		// There is a bug in Qt where a tab scroll button could have focus at this time.
 		if (!SCI(focused_view)->hasFocus()) SCI(focused_view)->setFocus();
+#if _WIN32
+		setStyle(QStyleFactory::create("Fusion"));
+#endif
 	}
 	~Application() override {
 		if (inited) delete ta;

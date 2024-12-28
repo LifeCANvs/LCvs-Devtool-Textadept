@@ -20,6 +20,8 @@
 #include <windows.h> // for GetModuleFileName
 #elif __APPLE__
 #include <mach-o/dyld.h> // for _NSGetExecutablePath
+#elif (__FreeBSD__ || __NetBSD__ || __DragonFly__)
+#include <sys/sysctl.h> // for sysctl
 #endif
 
 // Variables declared in textadept.h.
@@ -322,6 +324,11 @@ static void lua_pushdoc(lua_State *L, sptr_t doc) {
 		lua_replace(L, -2);
 }
 
+// Returns whether or not the given document is the command entry.
+static bool is_command_entry(sptr_t doc) {
+	return doc == SS(command_entry, SCI_GETDOCPOINTER, 0, 0);
+}
+
 // Returns a suitable Scintilla view that can operate on the Scintilla document on the Lua
 // stack at the given index.
 // For non-global, non-command entry documents, loads that document in `dummy_view` (unless
@@ -335,7 +342,7 @@ static SciObject *view_for_doc(lua_State *L, int index) {
 		(lua_getfield(L, LUA_REGISTRYINDEX, BUFFERS), lua_pushdoc(L, doc), lua_gettable(L, -2)), index,
 		"this Buffer does not exist"),
 		lua_pop(L, 2); // pop buffer, _BUFFERS
-	if (doc == SS(command_entry, SCI_GETDOCPOINTER, 0, 0)) return command_entry;
+	if (is_command_entry(doc)) return command_entry;
 	if (doc == SS(dummy_view, SCI_GETDOCPOINTER, 0, 0)) return dummy_view;
 	return (SS(dummy_view, SCI_SETDOCPOINTER, 0, doc), dummy_view);
 }
@@ -480,11 +487,9 @@ static int buffer_index(lua_State *L) {
 	if (strcmp(lua_tostring(L, 2), "tab_label") == 0 &&
 		lua_todoc(L, 1) != SS(command_entry, SCI_GETDOCPOINTER, 0, 0))
 		return luaL_argerror(L, 3, "write-only property");
-	if (strcmp(lua_tostring(L, 2), "active") == 0 &&
-		lua_todoc(L, 1) == SS(command_entry, SCI_GETDOCPOINTER, 0, 0))
+	if (strcmp(lua_tostring(L, 2), "active") == 0 && is_command_entry(lua_todoc(L, 1)))
 		return (lua_pushboolean(L, is_command_entry_active()), 1);
-	if (strcmp(lua_tostring(L, 2), "height") == 0 &&
-		lua_todoc(L, 1) == SS(command_entry, SCI_GETDOCPOINTER, 0, 0))
+	if (strcmp(lua_tostring(L, 2), "height") == 0 && is_command_entry(lua_todoc(L, 1)))
 		return (lua_pushinteger(L, get_command_entry_height()), 1);
 	return (lua_settop(L, 2), lua_rawget(L, 1), 1);
 }
@@ -514,8 +519,9 @@ static int buffer_newindex(lua_State *L) {
 														lua_gettable(L, -2), lua_tointeger(L, -1) - 1),
 							luaL_checkstring(L, 3)),
 			0);
-	if (strcmp(lua_tostring(L, 2), "height") == 0 &&
-		lua_todoc(L, 1) == SS(command_entry, SCI_GETDOCPOINTER, 0, 0))
+	if (strcmp(lua_tostring(L, 2), "label") == 0 && is_command_entry(lua_todoc(L, 1)))
+		return (set_command_entry_label(luaL_checkstring(L, 3)), 0);
+	if (strcmp(lua_tostring(L, 2), "height") == 0 && is_command_entry(lua_todoc(L, 1)))
 		return (set_command_entry_height(
 							fmax(luaL_checkinteger(L, 3), SS(command_entry, SCI_TEXTHEIGHT, 0, 0))),
 			0);
@@ -533,7 +539,7 @@ static DialogOptions read_opts(lua_State *L, const char *button) {
 	DialogOptions opts = {strf("title"), strf("text"), strf("icon"),
 		{strf("button1"), strf("button2"), strf("button3")}, strf("dir"), strf("file"),
 		boolf("only_dirs"), boolf("multiple"), boolf("return_button"), tablef("columns"),
-		intf("search_column"), tablef("items")};
+		intf("search_column"), tablef("items"), intf("select")};
 	if (!opts.buttons[0] && button) // localize default button, e.g. _L['OK']
 		opts.buttons[0] = (lua_getglobal(L, "_L"), lua_getfield(L, -1, button), lua_tostring(L, -1));
 	return opts;
@@ -585,8 +591,11 @@ static int list_dialog_lua(lua_State *L) {
 	if (!opts.search_column) opts.search_column = 1;
 	luaL_argcheck(
 		L, opts.search_column > 0 && opts.search_column <= num_columns, 1, "invalid 'search_column'");
+	int num_items = opts.items ? lua_rawlen(L, opts.items) : 0;
+	luaL_argcheck(L, opts.items && num_items > 0, 1, "non-empty 'items' table expected");
+	if (!opts.select) opts.select = 1;
 	luaL_argcheck(
-		L, opts.items && lua_rawlen(L, opts.items) > 0, 1, "non-empty 'items' table expected");
+		L, opts.select > 0 && opts.select <= num_items / num_columns, 1, "invalid 'select'");
 	if (!opts.buttons[1]) // add localized cancel button, _L['Cancel']
 		opts.buttons[1] = (lua_getglobal(L, "_L"), lua_getfield(L, -1, "Cancel"), lua_tostring(L, -1));
 	return list_dialog(opts, L);
@@ -1070,6 +1079,7 @@ static int goto_doc_lua(lua_State *L) {
 // `view.split()` Lua function.
 static int split_view_lua(lua_State *L) {
 	SciObject *view = luaL_checkview(L, 1);
+	if (!initing) emit("view_before_switch", -1);
 	int first_line = SS(view, SCI_GETFIRSTVISIBLELINE, 0, 0),
 			x_offset = SS(view, SCI_GETXOFFSET, 0, 0), current_pos = SS(view, SCI_GETCURRENTPOS, 0, 0),
 			anchor = SS(view, SCI_GETANCHOR, 0, 0);
@@ -1208,19 +1218,37 @@ bool init_textadept(int argc, char **argv) {
 	textadept_home = realpath(textadept_home, NULL), free(p);
 	p = strstr(textadept_home, "MacOS"), strcpy(p, "Resources\0");
 	os = "OSX";
+#elif (__FreeBSD__ || __NetBSD__ || __DragonFly__)
+#if (__FreeBSD__ || __DragonFly__)
+	int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1};
+#elif __NetBSD__
+	int mib[4] = {CTL_KERN, KERN_PROC_ARGS, -1, KERN_PROC_PATHNAME};
+#endif
+	size_t cb = FILENAME_MAX + 1;
+	sysctl(mib, 4, textadept_home, &cb, NULL, 0);
+	char *p = textadept_home;
+	textadept_home = realpath(textadept_home, NULL), free(p);
+	if ((last_slash = strrchr(textadept_home, '/'))) *last_slash = '\0';
+	os = "BSD";
+	// TODO: OpenBSD uses {CTL_KERN, KERN_PROC_ARGS, getpid(), KERN_PROC_ARGV}, but the result is
+	// **argv, so realpath() will not work on argv[0] without iterating over $PATH.
+#else
+#error platform not supported
 #endif
 	if (getenv("TEXTADEPT_HOME")) strcpy(textadept_home, getenv("TEXTADEPT_HOME"));
 
 	setlocale(LC_COLLATE, "C"), setlocale(LC_NUMERIC, "C"); // for Lua
-	if (!init_lua(argc, argv)) return (close_textadept(), false); // exit_status has been set
+	bool ok = init_lua(argc, argv);
+	if (!ok) return (close_textadept(), ok); // exit_status has been set
 	command_entry = new_scintilla(notified), add_doc(0);
 	dummy_view = new_scintilla(notified), SS(dummy_view, SCI_SETMODEVENTMASK, SC_MOD_NONE, 0);
-	initing = true, new_window(create_first_view), run_file("init.lua"), initing = false;
+	initing = true, new_window(create_first_view), ok = run_file("init.lua"), initing = false;
+	if (!ok) return (close_textadept(), exit_status = 1, ok);
 	emit("buffer_new", -1), emit("view_new", -1); // first ones
 	lua_pushdoc(lua, SS(command_entry, SCI_GETDOCPOINTER, 0, 0)), lua_setglobal(lua, "buffer");
 	emit("buffer_new", -1), emit("view_new", -1); // command entry
 	lua_pushdoc(lua, SS(focused_view, SCI_GETDOCPOINTER, 0, 0)), lua_setglobal(lua, "buffer");
-	return (emit("initialized", -1), true); // ready
+	return (emit("initialized", -1), ok); // ready
 }
 
 // Note: this function is entirely dependent on Lua to create `ui.context_menu` and

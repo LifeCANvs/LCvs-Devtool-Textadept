@@ -47,7 +47,12 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-20.04, windows-2019, macOS-12]
+        include:
+          - os: ubuntu-20.04
+          - os: windows-2019
+            qt: '6.7'
+          - os: macOS-13
+            qt: '6.5'
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -63,7 +68,7 @@ jobs:
         if: runner.os == 'Windows' || runner.os == 'macOS'
         uses: jurplel/install-qt-action@v3
         with:
-          version: '6.7.*'
+          version: ${{ matrix.qt }}
           modules: 'qt5compat'
 
       - name: Install build dependencies like Qt and GTK (Linux)
@@ -277,7 +282,80 @@ jobs:
 
       - name: Read test output
         if: success() || failure()
-        run: cat test.log
+        run: |
+          cat test.log
+          grep -q '^0 failed' test.log
+
+  smoke-test-bsd:
+    if: ${{ ! inputs.no_tests }}
+    runs-on: ubuntu-latest
+    env:
+      TEXTADEPT_HOME: ${{ github.workspace }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout textadept-build dependencies
+        uses: actions/checkout@v4
+        with:
+          repository: orbitalquark/textadept-build
+          path: textadept-build
+
+      - name: Install dependencies
+        uses: cross-platform-actions/action@v0.25.0
+        with:
+          operating_system: freebsd
+          version: '14.1'
+          shell: bash
+          environment_variables: TEXTADEPT_HOME
+          sync_files: false
+          shutdown_vm: false
+          run: sudo pkg install -y cmake ninja qt5 ncurses
+
+      - name: Build
+        uses: cross-platform-actions/action@v0.25.0
+        with:
+          operating_system: freebsd
+          version: '14.1'
+          shell: bash
+          environment_variables: TEXTADEPT_HOME
+          sync_files: runner-to-vm
+          shutdown_vm: false
+          run: |
+            # Move cached dependencies into build/_deps.
+            mkdir -p build/_deps && mv textadept-build/* build/_deps && rm -r textadept-build
+
+            # Build.
+            cmake -S . -B build -D NIGHTLY=1 -G Ninja
+            cmake --build build
+
+            # Copy lexers.
+            cp -r build/_deps/scintillua-src/lexers .
+
+      - name: Test
+        uses: cross-platform-actions/action@v0.25.0
+        with:
+          operating_system: freebsd
+          version: '14.1'
+          shell: bash
+          environment_variables: TEXTADEPT_HOME
+          sync_files: false
+          shutdown_vm: false
+          run: build/textadept-curses -t
+        timeout-minutes: 1
+
+      - name: Read test output
+        if: success() || failure()
+        uses: cross-platform-actions/action@v0.25.0
+        with:
+          operating_system: freebsd
+          version: '14.1'
+          shell: bash
+          environment_variables: TEXTADEPT_HOME
+          sync_files: false
+          run: |
+            cat test.log
+            grep -q '^0 failed' test.log
 
   coverage:
     if: ${{ ! inputs.no_coverage }}
@@ -336,15 +414,15 @@ jobs:
       - name: Run tests
         run: |
           xvfb-run -a build/textadept -t -T || true
-          xvfb-run -a build/textadept-gtk -t -T || true
+          xvfb-run -a build/textadept-gtk -f -t -T || true
           xvfb-run -a xterm -e build/textadept-curses -t -T
         env:
           TEXTADEPT_HOME: ${{ github.workspace }}
           LANG: en_US.UTF-8
         timeout-minutes: 5
-        continue-on-error: true
 
       - name: Read test output
+        if: success() || failure()
         run: cat test.log
 
       - name: Process coverage reports
