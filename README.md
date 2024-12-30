@@ -47,8 +47,8 @@ the application itself.
 - Windows 8.1/8/7 64-bit: up to [release 11.4][] (and 12.0alpha3)
 - Windows Vista: ?
 - Windows XP 32-bit: up to [release 11.3][] (dropped support for 32-bit Windows with 11.4alpha)
-- Windows 98SE: ?
-- Windows 95: ?
+- Windows 98SE: n/a
+- Windows 95: n/a
 - Windows 2000: ?
 - Windows NT4: ?
 
@@ -57,7 +57,7 @@ the application itself.
 - macOS X 10.7: up to [release 11.3][]
 - macOS X 10.6: up to [release 10.8][]
 
-- FreeBSD 13+: up to release 11.4 (and 11.5alpha) (dropped BSD support with 11.5alpha2)
+- FreeBSD 13+: up to release 11.4 (and 11.5alpha) (dropped BSD support with 11.5alpha2); 12.5 restored BSD support
 
 [current release]: https://github.com/orbitalquark/textadept/releases/tag/textadept_12.4
 [release 12.1]: https://github.com/orbitalquark/textadept/releases/tag/textadept_12.1
